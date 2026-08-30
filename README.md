@@ -12,6 +12,12 @@ missing pieces along with the commands that retrieve them.
 Pre-release. Nothing here is installable yet, and the package is not published. The design lives in
 `docs/specs/2026-08-30-sebastian.md` and the implementation is in progress.
 
+## Requirements
+
+- macOS or Linux. Windows is unsupported.
+- Node.js 22.16.0 or later, or 24 or later. Node 23 is unsupported because its `node:sqlite` lacks
+  FTS5, the full-text search engine Sebastian's archive depends on.
+
 ## How it works
 
 Each compaction cycle runs four steps. The fourth feeds the first of the next cycle.

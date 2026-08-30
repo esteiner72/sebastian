@@ -1,0 +1,54 @@
+{
+  "name": "sebastian-cc",
+  "version": "0.1.0",
+  "description": "A Claude Code plugin that makes compaction recoverable",
+  "license": "MIT",
+  "author": {
+    "name": "Ethan Steiner",
+    "email": "ethansteiner14@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/esteiner72/sebastian.git"
+  },
+  "homepage": "https://github.com/esteiner72/sebastian#readme",
+  "type": "module",
+  "bin": {
+    "seb": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "hooks",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.16.0 <23 || >=24"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "compaction",
+    "context",
+    "memory"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.4.0",
+    "eslint": "^10.9.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.68.0",
+    "vitest": "^4.1.11"
+  }
+}
