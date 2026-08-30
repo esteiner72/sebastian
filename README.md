@@ -1,6 +1,6 @@
 # Sebastian
 
-Sebastian is a Claude Code plugin that makes compaction recoverable.
+Sebastian is a Claude Code plugin that makes compaction recoverable. He is also my dog.
 
 When Claude Code compacts a conversation, a summary replaces the transcript. The raw transcript
 survives on disk, but nothing tells the model what the summary dropped, so it never looks. Sebastian
