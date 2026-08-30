@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test output
+coverage/
+
+# Logs
+npm-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.*
+
+# Editor / OS
+.DS_Store
+
+# Local Claude Code config
+CLAUDE.local.md
+.claude/settings.local.json
+
+# etc.
+docs/specs/
+
+# Safety net — the real eval corpus lives outside this repo, at ~/sebastian-eval-corpus/
+eval/corpus-local/
