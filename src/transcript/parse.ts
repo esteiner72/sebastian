@@ -39,7 +39,7 @@ export function parseTranscript(path: string): TranscriptEvent[] {
   return events;
 }
 
-function toEvent(turn: number, cycle: number, raw: string): TranscriptEvent {
+export function toEvent(turn: number, cycle: number, raw: string): TranscriptEvent {
   const record = parseLine(raw);
   const message = obj(record?.message);
   return {
