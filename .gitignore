@@ -26,5 +26,5 @@ CLAUDE.local.md
 # etc.
 docs/specs/
 
-# Safety net — the real eval corpus lives outside this repo, at ~/sebastian-eval-corpus/
+# the real eval corpus lives outside this repo
 eval/corpus-local/

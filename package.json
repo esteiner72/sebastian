@@ -42,7 +42,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
-    "check:manifest": "node scripts/check-manifest.mjs"
+    "check:manifest": "node scripts/check-manifest.mjs",
+    "check:shapes": "node scripts/check-fixture-shapes.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
