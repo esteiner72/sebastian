@@ -284,13 +284,14 @@ function separatorWidth(command: string, at: number): number {
 
 // sed's script and rg's pattern occupy the first non-flag slot, so it is skipped for those two.
 // An operand counts as a path when it contains a slash or a file extension; quoted tokens are
-// scripts or patterns, never paths.
+// scripts or patterns, never paths, and a token carrying a redirection operator is a stream
+// target, not a read — `cat notes.txt 2>/dev/null` reads one file, not two.
 function pathOperands(cmd: string, args: string[]): string[] {
   const operands = args.filter((a) => !a.startsWith('-') && !/^\d+$/.test(a));
   const skipFirst = cmd === 'sed' || cmd === 'rg' ? 1 : 0;
   return operands
     .slice(skipFirst)
-    .filter((a) => !/['"]/.test(a) && (a.includes('/') || /\.\w+$/.test(a)));
+    .filter((a) => !/['"<>]/.test(a) && (a.includes('/') || /\.\w+$/.test(a)));
 }
 
 function draftBase(

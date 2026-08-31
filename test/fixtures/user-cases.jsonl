@@ -17,3 +17,5 @@
 {"type":"assistant","uuid":"a16","sessionId":"fix-users","timestamp":"2026-08-30T12:01:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The archive writer takes its cap from the same setting the reconciler reads."}]}}
 {"type":"user","uuid":"u17","sessionId":"fix-users","timestamp":"2026-08-30T12:01:10.000Z","message":{"role":"user","content":"Why?"}}
 {"type":"assistant","uuid":"a18","sessionId":"fix-users","timestamp":"2026-08-30T12:01:15.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Because the writer batches under the cap, so a second setting would drift from the first one."}]}}
+{"type":"assistant","uuid":"a19","sessionId":"fix-users","timestamp":"2026-08-30T12:01:20.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_h1","name":"Bash","input":{"command":"cat /repo/notes.txt 2>/dev/null"}}]}}
+{"type":"user","uuid":"u20","sessionId":"fix-users","timestamp":"2026-08-30T12:01:25.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_h1","content":"cap notes for the archive writer"}]}}

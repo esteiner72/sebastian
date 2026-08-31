@@ -113,7 +113,9 @@ describe('user-cases fixture', () => {
   // acknowledgement. u13 opens with `can` and also carries no `?`, and is still a question, so
   // its anchor lands on the answering prose at a14 and never on u13 as well. u15 opens `what's`
   // and carries no `?`, so it reaches the list only if the token is cut at the apostrophe rather
-  // than stripped of every non-letter, which would leave `whats`.
+  // than stripped of every non-letter, which would leave `whats`. a19's command carries a
+  // `2>/dev/null` redirection, which contains a slash and passes the flag and digit filters, so it
+  // reads as a second file operand unless redirection tokens are excluded outright.
   it("decides question or imperative from the opening token: bare `can` is a question, bare `do` is not, and `what's` matches only after the apostrophe cut", () => {
     expect(extract('user-cases.jsonl').map(brief)).toEqual([
       { id: 't3u1', type: 'user', key: 'Which config file controls the retry limit for the sync panel?', uuid: 'u3', cycle: 0 },
@@ -126,6 +128,8 @@ describe('user-cases fixture', () => {
       { id: 't14a1', type: 'answer', key: 'add cap client retry', uuid: 'a14', cycle: 0 },
       { id: 't16a1', type: 'answer', key: 'archive cap writer', uuid: 'a16', cycle: 0 },
       { id: 't18a1', type: 'answer', key: 'why', uuid: 'a18', cycle: 0 },
+      { id: 't19c1', type: 'cmd', key: 'cat /repo/notes.txt 2>/dev/null', uuid: 'a19', cycle: 0 },
+      { id: 't19r1', type: 'read', key: '/repo/notes.txt', uuid: 'a19', cycle: 0 },
     ]);
   });
 
