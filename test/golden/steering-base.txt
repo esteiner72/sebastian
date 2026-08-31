@@ -1,0 +1,4 @@
+## Compact Instructions
+- Preserve verbatim: file paths edited, error signatures, commands run, user decisions.
+- Prefer dropping prose over dropping identifiers; write "[archived: turn N]" where you drop detail.
+- A Forgotten Index of dropped content will be injected; do not re-summarize archived material.
