@@ -1,38 +1,42 @@
 #!/usr/bin/env node
-import { readFileSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { logEvent, openDb, projectSlug } from './store/db.js';
+import { preCompact } from './hooks/preCompact.js';
+import { postCompact } from './hooks/postCompact.js';
+import { sessionStart } from './hooks/sessionStart.js';
+import { readStdin, runHook, type HookBody } from './hooks/runHook.js';
 
-const HOOK_NAMES = new Set(['pre-compact', 'post-compact', 'session-start']);
+// The names hooks/run-hook.sh forwards, and the bodies they reach.
+const BODIES: Record<string, HookBody> = {
+  'pre-compact': preCompact,
+  'post-compact': postCompact,
+  'session-start': sessionStart,
+};
 
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
-  if (command === 'hook') return Promise.resolve(runHook(rest[0]));
+  if (command === 'hook') return Promise.resolve(dispatchHook(rest[0]));
   process.stderr.write('usage: seb hook <pre-compact|post-compact|session-start>\n');
   return Promise.resolve(1);
 }
 
-// Hooks are fail-open by contract: never a non-zero exit, never a byte on stdout.
-function runHook(name: string | undefined): number {
-  try {
-    if (name === undefined || !HOOK_NAMES.has(name)) return 0;
-    const payload = readPayload();
-    const cwd = typeof payload.cwd === 'string' ? payload.cwd : process.cwd();
-    const db = openDb(projectSlug(cwd));
-    logEvent(db, name, 'info', 'noop');
-    db.close();
-  } catch (err) {
-    process.stderr.write(`sebastian: ${String(err)}\n`);
+// The thin edge of the fail-open contract: runHook never throws, so the exit code is always 0, and
+// stdout is written exactly once or not at all. That single write is a protocol channel —
+// PreCompact's stdout becomes the compact instructions, SessionStart's becomes injected context —
+// so every diagnostic goes to stderr and the log table instead.
+function dispatchHook(name: string | undefined): number {
+  if (name === undefined) {
+    process.stderr.write('sebastian: hook requires a name\n');
+    return 0;
   }
+  const body = BODIES[name];
+  if (body === undefined) {
+    process.stderr.write(`sebastian: unknown hook ${name}\n`);
+    return 0;
+  }
+  const out = runHook(name, body, readStdin());
+  if (out !== '') process.stdout.write(out);
   return 0;
-}
-
-function readPayload(): Record<string, unknown> {
-  if (process.stdin.isTTY) return {};
-  const raw = readFileSync(0, 'utf8');
-  if (raw.trim() === '') return {};
-  const parsed: unknown = JSON.parse(raw);
-  return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
 }
 
 const invokedDirectly =

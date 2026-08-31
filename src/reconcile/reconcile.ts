@@ -1,8 +1,11 @@
 import type { Anchor } from '../transcript/anchors.js';
 import { contentTokens } from '../transcript/text.js';
 
+// `sessionId` travels with the verdict because anchor ids are session-local and the anchors table
+// keys on (session_id, id): a bare anchor id cannot address a row in a project-scoped database.
 export interface Verdict {
   anchorId: string;
+  sessionId: string;
   verdict: 'kept' | 'dropped';
   score: number;
 }
@@ -49,7 +52,11 @@ function wasRestored(key: string, restoredPaths: Set<string>): boolean {
 }
 
 function kept(anchor: Anchor, score: number): Verdict {
-  return { anchorId: anchor.id, verdict: 'kept', score };
+  return { anchorId: anchor.id, sessionId: anchor.sessionId, verdict: 'kept', score };
+}
+
+function dropped(anchor: Anchor, score: number): Verdict {
+  return { anchorId: anchor.id, sessionId: anchor.sessionId, verdict: 'dropped', score };
 }
 
 // Containment of the normalized key; a path whose full form is absent falls back to its basename,
@@ -61,7 +68,7 @@ function identifierVerdict(anchor: Anchor, normSummary: string): Verdict {
   if (key !== '' && normSummary.includes(key)) return kept(anchor, 1);
   const base = anchor.key.includes('/') ? stripPunct(normalize(basename(anchor.key))) : '';
   if (base !== '' && normSummary.includes(base)) return kept(anchor, 1);
-  return { anchorId: anchor.id, verdict: 'dropped', score: 0 };
+  return dropped(anchor, 0);
 }
 
 // `answer` matches on the answer's own prose (the excerpt), never the question key: a summary
@@ -72,7 +79,7 @@ function proseVerdict(anchor: Anchor, sentences: Set<string>[]): Verdict {
   const tokens = new Set(contentTokens(source));
   let best = 0;
   for (const sentence of sentences) best = Math.max(best, containment(tokens, sentence));
-  return { anchorId: anchor.id, verdict: best >= KEEP_THRESHOLD ? 'kept' : 'dropped', score: best };
+  return best >= KEEP_THRESHOLD ? kept(anchor, best) : dropped(anchor, best);
 }
 
 // Containment, not Jaccard: shared tokens over the smaller set. A union denominator has a

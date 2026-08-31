@@ -17,19 +17,21 @@ const NONE = new Set<string>();
 
 // Matcher goldens. The eval harness scores reconciliation in aggregate over the corpus; each case
 // here pins one measured false-alarm or false-negative class to an exact verdict, so a regression
-// names the class it broke instead of moving an aggregate number.
+// names the class it broke instead of moving an aggregate number. Every verdict carries its
+// anchor's session id, because anchor ids are session-local and the store keys on
+// (session_id, id).
 
 describe('reconcile', () => {
   it('keeps a preserved-uuid anchor the summary never mentions, so material still in context verbatim is never flagged as lost', () => {
     const preserved = anchor('t3u1', 'user', 3, 'keep the retry logic out of the store layer');
     expect(reconcile([preserved], 'A summary about something else.', new Set(['uuid-t3u1']), NONE))
-      .toEqual([{ anchorId: 't3u1', verdict: 'kept', score: 1 }]);
+      .toEqual([{ anchorId: 't3u1', sessionId: 's1', verdict: 'kept', score: 1 }]);
   });
 
   it('keeps a platform-restored edit path without summary matching — the measured 96.6% edit false-drop class', () => {
     const restored = anchor('t5d1', 'edit', 5, 'src/store/db.ts');
     expect(reconcile([restored], 'A summary that never names the file.', NONE, new Set(['src/store/db.ts'])))
-      .toEqual([{ anchorId: 't5d1', verdict: 'kept', score: 1 }]);
+      .toEqual([{ anchorId: 't5d1', sessionId: 's1', verdict: 'kept', score: 1 }]);
   });
 
   it('stage 0b joins a relative bash-read key to its absolute restored path by suffix, but never a bare filename, whose collisions would hide a real drop', () => {
@@ -37,8 +39,8 @@ describe('reconcile', () => {
     const bare = anchor('t7r1', 'read', 7, 'db.ts');
     const restored = new Set(['/repo/src/store/db.ts']);
     expect(reconcile([relative, bare], '', NONE, restored)).toEqual([
-      { anchorId: 't6r1', verdict: 'kept', score: 1 },
-      { anchorId: 't7r1', verdict: 'dropped', score: 0 },
+      { anchorId: 't6r1', sessionId: 's1', verdict: 'kept', score: 1 },
+      { anchorId: 't7r1', sessionId: 's1', verdict: 'dropped', score: 0 },
     ]);
   });
 
@@ -47,8 +49,8 @@ describe('reconcile', () => {
     const mentioned = anchor('t8d1', 'edit', 8, 'src/store/db.ts');
     const absent = anchor('t11d1', 'edit', 11, 'src/steer/adapt.ts');
     expect(reconcile([mentioned, absent], summary, NONE, NONE)).toEqual([
-      { anchorId: 't8d1', verdict: 'kept', score: 1 },
-      { anchorId: 't11d1', verdict: 'dropped', score: 0 },
+      { anchorId: 't8d1', sessionId: 's1', verdict: 'kept', score: 1 },
+      { anchorId: 't11d1', sessionId: 's1', verdict: 'dropped', score: 0 },
     ]);
   });
 
@@ -58,17 +60,26 @@ describe('reconcile', () => {
     // set of 8 is the larger side: 6 over the smaller set of 6 = 1.0.
     const summary = 'User decision: use tabs instead of spaces for repo indentation. Other work followed.';
     expect(reconcile([decision], summary, NONE, NONE)).toEqual([
-      { anchorId: 't14u1', verdict: 'kept', score: 1 },
+      { anchorId: 't14u1', sessionId: 's1', verdict: 'kept', score: 1 },
     ]);
   });
 
-  it('scores a loose paraphrase into the uncertain band instead of kept — the near-miss signature the renderer hedges', () => {
+  it('scores a loose paraphrase into the uncertain band instead of kept, and keeps a score that lands exactly on the threshold', () => {
     const decision = anchor('t14u1', 'user', 14, 'use tabs instead of spaces for all indentation in this repo');
     // Key tokens {use,tabs,instead,spaces,indentation,repo}; sentence tokens
     // {team,preferred,tabs,across,repo} are the smaller set at 5; shared {tabs,repo} = 2/5 = 0.4.
-    const summary = 'The team preferred tabs across the repo.';
-    expect(reconcile([decision], summary, NONE, NONE)).toEqual([
-      { anchorId: 't14u1', verdict: 'dropped', score: 0.4 },
+    const loose = 'The team preferred tabs across the repo.';
+    expect(reconcile([decision], loose, NONE, NONE)).toEqual([
+      { anchorId: 't14u1', sessionId: 's1', verdict: 'dropped', score: 0.4 },
+    ]);
+
+    // The threshold keeps at exactly 0.5, and half a decision recovered is recovered. Sentence
+    // tokens {team,chose,tabs,repo,indentation,generated,files} number 7, so the key's 6 are the
+    // smaller set; shared {tabs,repo,indentation} = 3/6 = 0.5. An exclusive comparison here reads
+    // as a drop and spends an index entry on material the summary still carries.
+    const borderline = 'The team chose tabs for repo indentation only in generated files.';
+    expect(reconcile([decision], borderline, NONE, NONE)).toEqual([
+      { anchorId: 't14u1', sessionId: 's1', verdict: 'kept', score: 0.5 },
     ]);
   });
 
@@ -79,15 +90,15 @@ describe('reconcile', () => {
     // 2 over the smaller set of 5 = 0.4. Against the question key {available,fts5,node} the same
     // sentence contains all 3 and would score 1.0 = kept.
     expect(reconcile([explanation], 'Discussed whether FTS5 is available in node builds.', NONE, NONE))
-      .toEqual([{ anchorId: 't20a1', verdict: 'dropped', score: 0.4 }]);
+      .toEqual([{ anchorId: 't20a1', sessionId: 's1', verdict: 'dropped', score: 0.4 }]);
     expect(reconcile([explanation], 'FTS5 shipped in node sqlite from Node 22, and no 23 release has it.', NONE, NONE))
-      .toEqual([{ anchorId: 't20a1', verdict: 'kept', score: 1 }]);
+      .toEqual([{ anchorId: 't20a1', sessionId: 's1', verdict: 'kept', score: 1 }]);
   });
 
   it('scores a stopword-only prose key 0 rather than NaN, which would poison the drop-rate arithmetic steering consumes', () => {
     const short = anchor('t2u1', 'user', 2, 'why is this here');
     expect(reconcile([short], 'Why is this here.', NONE, NONE)).toEqual([
-      { anchorId: 't2u1', verdict: 'dropped', score: 0 },
+      { anchorId: 't2u1', sessionId: 's1', verdict: 'dropped', score: 0 },
     ]);
   });
 });
@@ -114,13 +125,13 @@ describe('renderForgottenIndex', () => {
     anchor('t27r2', 'read', 27, 'src/index.ts'),
   ];
   const dropped = (anchorId: string, score: number): Verdict =>
-    ({ anchorId, verdict: 'dropped', score });
+    ({ anchorId, sessionId: 's1', verdict: 'dropped', score });
   // t4e1/t7e1 are plain prose drops (score < 0.25), t9a1 sits in the uncertain band, the
   // identifiers are plain drops, and one read anchor is kept to keep the totals honest.
   const verdicts: Verdict[] = [
     dropped('t4e1', 0), dropped('t7e1', 0.12), dropped('t9a1', 0.4), dropped('t12d1', 0),
     dropped('t15r1', 0), dropped('t18w1', 0), dropped('t21u1', 0), dropped('t24c1', 0),
-    { anchorId: 't27r2', verdict: 'kept', score: 1 },
+    { anchorId: 't27r2', sessionId: 's1', verdict: 'kept', score: 1 },
   ];
 
   it('digest tier lists the five highest-priority dropped anchors, reporting user and cmd drops by count only', () => {

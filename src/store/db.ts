@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { toEvent, type TranscriptEvent } from '../transcript/parse.js';
 import type { Anchor, AnchorType } from '../transcript/anchors.js';
+import type { Verdict } from '../reconcile/reconcile.js';
 
 // Matches Claude Code's own project-directory slug: every non-alphanumeric byte becomes a dash.
 export function projectSlug(cwd: string): string {
@@ -113,9 +114,11 @@ export interface AnchorFilters {
   limit?: number;
 }
 
-// The query is reduced to quoted letter, digit and underscore tokens before it reaches MATCH, so
-// FTS5 operator characters in user input (dashes, colons, parentheses) cannot raise a syntax error;
-// the tokens combine as an implicit AND. The class is Unicode-aware because FTS5's unicode61
+// The query is reduced to letter, digit and underscore tokens before it reaches MATCH, which drops
+// FTS5's operator characters (dashes, colons, parentheses). Each surviving token is then quoted,
+// because the reduction cannot drop the operator *words*: a bare AND, OR, NOT or NEAR is grammar to
+// FTS5, and a user searching `AND backoff` would otherwise get a syntax error instead of rows.
+// Quoted tokens combine as an implicit AND. The class is Unicode-aware because FTS5's unicode61
 // tokenizer indexes non-ASCII content: an ASCII-only reduction turns an accented identifier or a
 // CJK path into archived-but-unreachable text. Filters compile to plain WHERE clauses on the joined
 // base table.
@@ -176,11 +179,85 @@ export interface CycleRecord {
 }
 
 // PostCompact is the only writer of cycles rows, and it writes after reconciling — hence the
-// reconcile timestamp lands here. OR REPLACE makes a re-fired hook idempotent.
+// reconcile timestamp lands here. A cycle whose summary never reached us is recorded all the same,
+// because the compaction happened, but it stays unstamped: no summary means no verdicts, and a
+// timestamp would claim a reconciliation that never ran. OR REPLACE makes a re-fired hook
+// idempotent.
 export function recordCycle(db: DatabaseSync, c: CycleRecord): void {
+  const reconciledAt = c.summary === null ? null : new Date().toISOString();
   db.prepare(
     'INSERT OR REPLACE INTO cycles (session_id, cycle, trigger, summary, reconciled_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(c.sessionId, c.cycle, c.trigger, c.summary, new Date().toISOString());
+  ).run(c.sessionId, c.cycle, c.trigger, c.summary, reconciledAt);
+}
+
+// One verdict per anchor, in one transaction: a half-written cycle would feed drop-rate a
+// population that never existed. A verdict whose anchor is absent — its message was outside the
+// archived delta, so the anchor insert was skipped — updates nothing and is counted out of the
+// return value.
+export function persistVerdicts(db: DatabaseSync, verdicts: Verdict[]): number {
+  const stmt = db.prepare('UPDATE anchors SET verdict = ?, score = ? WHERE session_id = ? AND id = ?');
+  db.exec('BEGIN');
+  try {
+    const updated = verdicts.reduce(
+      (n, v) => n + Number(stmt.run(v.verdict, v.score, v.sessionId, v.anchorId).changes),
+      0,
+    );
+    db.exec('COMMIT');
+    return updated;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export interface ReconciledCycle {
+  sessionId: string;
+  cycle: number;
+  anchors: Anchor[];
+  verdicts: Verdict[];
+}
+
+// What SessionStart injects: the anchors of the session's latest cycle, with their verdicts.
+// Anchors still carrying a NULL verdict are excluded, so an unreconciled cycle reads as empty
+// rather than as a cycle that dropped nothing.
+//
+// The lookup is the session's newest cycle row or nothing. Falling back to an older reconciled
+// cycle, or to another session in the same project database, would inject a stale index labelled
+// as this cycle's — anchor ids are session-local, so its entries would not even address the right
+// rows. Injection is per-session by contract; project scope belongs to `seb search`.
+export function latestReconciledCycle(db: DatabaseSync, sessionId?: string | null): ReconciledCycle | null {
+  const row = pickCycle(db, sessionId);
+  if (row === null) return null;
+  const rows = db
+    .prepare(
+      'SELECT id, uuid, session_id, cycle, turn, type, key, excerpt, verdict, score FROM anchors ' +
+        'WHERE session_id = ? AND cycle = ? AND verdict IS NOT NULL ORDER BY turn',
+    )
+    .all(row.sessionId, row.cycle);
+  return {
+    sessionId: row.sessionId,
+    cycle: row.cycle,
+    anchors: rows.map(rowToAnchor),
+    verdicts: rows.map(rowToVerdict),
+  };
+}
+
+function pickCycle(db: DatabaseSync, sessionId?: string | null): { sessionId: string; cycle: number } | null {
+  if (sessionId === undefined || sessionId === null) return null;
+  const row = db
+    .prepare('SELECT session_id, cycle, reconciled_at FROM cycles WHERE session_id = ? ORDER BY cycle DESC LIMIT 1')
+    .get(sessionId);
+  if (row === undefined || row.reconciled_at === null) return null;
+  return { sessionId: row.session_id as string, cycle: Number(row.cycle) };
+}
+
+function rowToVerdict(row: Record<string, unknown>): Verdict {
+  return {
+    anchorId: row.id as string,
+    sessionId: row.session_id as string,
+    verdict: row.verdict === 'kept' ? 'kept' : 'dropped',
+    score: Number(row.score),
+  };
 }
 
 export interface TelemetryEntry {
