@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractAnchors } from '../src/transcript/anchors.js';
 import { parseTranscript } from '../src/transcript/parse.js';
@@ -113,6 +113,32 @@ describe('store round-trip', () => {
     // The skip is not a loss: the held-back message arriving later admits its anchors.
     expect(archiveDelta(db, events, anchors)).toEqual({ messages: 1, anchors: 2 });
     expect(searchAnchors(db, 'timeout', { type: 'answer' })).toHaveLength(1);
+    db.close();
+  });
+
+  // The archive stores whole transcripts verbatim, so its permissions are the only thing between a
+  // shared machine and every prompt in the project. umask masks the mode mkdirSync asks for, and
+  // SQLite creates the database file with the process umask applied to 0666 — 0644 under the
+  // common default — so neither mode can be requested at creation and left at that.
+  it('leaves the state directory at 0700 and the database file at 0600, so an archived transcript is never group- or world-readable', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'seb-modes-')), 'state', 'sebastian.db');
+    const db = openDbAt(path);
+    expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    db.close();
+  });
+
+  // FTS5 reads a bare uppercase AND, OR, NOT or NEAR as a query operator, so a user's own words
+  // reach MATCH as grammar: `AND backoff` raises `fts5: syntax error near "AND"` and the search
+  // throws in the user's face. Reducing to letter-and-digit tokens does not help — the reduction
+  // keeps those words intact — so quoting every token is what contains them.
+  it('answers a query whose words are FTS5 operators, and one made only of punctuation, rather than raising a syntax error', () => {
+    const { db } = freshArchive();
+    // "and" is a real token of the user decision at line 8, so quoting makes this a two-word
+    // search that matches; unquoted it is an operator with nothing on its left.
+    expect(searchAnchors(db, 'AND backoff').map((a) => a.id)).toEqual(['t7u1']);
+    expect(searchAnchors(db, 'NEAR retry OR sync').map((a) => a.id)).toEqual([]);
+    expect(searchAnchors(db, '--- :: ()')).toEqual([]);
     db.close();
   });
 

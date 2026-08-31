@@ -19,8 +19,10 @@ const MAX_DEPTH = 8;
 const MAX_LISTED = 15;
 
 // Paths src/transcript reads by name. Absence is fatal to a specific behaviour, named here so a
-// failure says what broke rather than which regex missed. The fallbacks that only apply when a
-// primary is absent (attachment.filePath, attachment.path, session_id) are deliberately excluded.
+// failure says what broke rather than which regex missed. Two kinds of path stay out: fallbacks
+// that only apply when a primary is absent (attachment.filePath, attachment.path, session_id), and
+// tool-specific inputs that a given corpus may simply never contain (input.url, input.query,
+// input.notebook_path) — a corpus without one of those is not a format change.
 const CONTRACT_PATHS = [
   ['uuid', 'anchor identity and the preserved-message join'],
   ['sessionId', 'anchor provenance'],
@@ -28,11 +30,20 @@ const CONTRACT_PATHS = [
   ['timestamp', 'anchor ordering'],
   ['message.role', 'speaker attribution'],
   ['message.content', 'every anchor body'],
+  ['message.content[].type', 'block classification, which decides the anchor type'],
+  ['message.content[].text', 'answer excerpts and user text'],
+  ['message.content[].id', 'the tool_use half of the Bash exit-code join'],
+  ['message.content[].tool_use_id', 'the tool_result half of the Bash exit-code join'],
+  ['message.content[].is_error', 'the error-anchor source gate'],
+  ['message.content[].name', 'tool anchor typing'],
+  ['message.content[].input.file_path', 'edit and read anchors'],
+  ['message.content[].input.command', 'cmd anchors and the bash-as-read scan'],
   ['subtype', 'compact_boundary detection'],
   ['compactMetadata.trigger', 'auto-versus-manual steering'],
   ['compactMetadata.preservedMessages.allUuids', 'reconciliation preserved set'],
   ['isCompactSummary', 'summary exclusion from anchors'],
   ['isMeta', 'genuine-user predicate'],
+  ['isVisibleInTranscriptOnly', 'genuine-user predicate'],
   ['attachment.type', 'restored-file classification'],
   ['attachment.filename', 'restoredPaths'],
 ];

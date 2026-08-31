@@ -13,4 +13,9 @@
 {"type":"attachment","uuid":"at12","sessionId":"fix-boundary","timestamp":"2026-08-30T11:10:06.000Z","attachment":{"type":"compact_file_reference","filename":"/repo/src/parser/tokens.ts"}}
 {"type":"file-history-snapshot","messageId":"a1","isSnapshotUpdate":false,"snapshot":{}}
 {"type":"user","uuid":"u14","sessionId":"fix-boundary","timestamp":"2026-08-30T11:10:10.000Z","message":{"role":"user","content":"Continue with the tokenizer changes."}}
+{"type":"system","subtype":"compact_boundary","uuid":"b15","sessionId":"fix-boundary","timestamp":"2026-08-30T11:20:00.000Z","content":"Conversation compacted","level":"info","compactMetadata":{"trigger":"auto","preTokens":2000,"postTokens":200,"cumulativeDroppedTokens":1800,"durationMs":60,"preservedSegment":{"headUuid":"u14","anchorUuid":"u14","tailUuid":"u14"},"preservedMessages":{"anchorUuid":"u14","uuids":["u14"],"allUuids":["u14"]}}}
+{"type":"attachment","uuid":"at16","sessionId":"fix-boundary","timestamp":"2026-08-30T11:20:01.000Z","attachment":{"type":"file","filename":"/repo/src/parser/lex.ts","content":{"type":"text"}}}
+{"type":"attachment","uuid":"at17","sessionId":"fix-boundary","timestamp":"2026-08-30T11:20:02.000Z","attachment":{"type":"selected_lines_in_ide","filename":"/repo/src/parser/scan.ts"}}
+{"type":"assistant","uuid":"a18","sessionId":"fix-boundary","timestamp":"2026-08-30T11:20:03.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Resuming the tokenizer work from the restored files."}]}}
+{"type":"attachment","uuid":"at19","sessionId":"fix-boundary","timestamp":"2026-08-30T11:20:04.000Z","attachment":{"type":"file","filename":"/repo/src/parser/late.ts","content":{"type":"text"}}}
 {"type":"assistant","uuid":"trunc
