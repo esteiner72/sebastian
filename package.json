@@ -41,7 +41,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "check:manifest": "node scripts/check-manifest.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
