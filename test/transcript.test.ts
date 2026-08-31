@@ -111,8 +111,10 @@ describe('user-cases fixture', () => {
   // `do` and carries no `?`, so it is an imperative and keeps its verbatim quote — read as a
   // question it would trade that quote for a bag-of-words key and point `seb show` at a10's
   // acknowledgement. u13 opens with `can` and also carries no `?`, and is still a question, so
-  // its anchor lands on the answering prose at a14 and never on u13 as well.
-  it('reads a bare `do` opener as an imperative and a bare `can` opener as a question, neither one needing a question mark', () => {
+  // its anchor lands on the answering prose at a14 and never on u13 as well. u15 opens `what's`
+  // and carries no `?`, so it reaches the list only if the token is cut at the apostrophe rather
+  // than stripped of every non-letter, which would leave `whats`.
+  it("decides question or imperative from the opening token: bare `can` is a question, bare `do` is not, and `what's` matches only after the apostrophe cut", () => {
     expect(extract('user-cases.jsonl').map(brief)).toEqual([
       { id: 't3u1', type: 'user', key: 'Which config file controls the retry limit for the sync panel?', uuid: 'u3', cycle: 0 },
       { id: 't4r1', type: 'read', key: '/repo/config/sync.json', uuid: 'a4', cycle: 0 },
@@ -122,7 +124,17 @@ describe('user-cases fixture', () => {
       { id: 't11c1', type: 'cmd', key: 'rg -n "timeout|retry" /repo/src/sync/retry.ts', uuid: 'a11', cycle: 0 },
       { id: 't11r1', type: 'read', key: '/repo/src/sync/retry.ts', uuid: 'a11', cycle: 0 },
       { id: 't14a1', type: 'answer', key: 'add cap client retry', uuid: 'a14', cycle: 0 },
+      { id: 't16a1', type: 'answer', key: 'archive cap writer', uuid: 'a16', cycle: 0 },
+      { id: 't18a1', type: 'answer', key: 'why', uuid: 'a18', cycle: 0 },
     ]);
+  });
+
+  // Every interrogative is also a stopword, so u17 has no content tokens at all. An empty key
+  // indexes nothing in the anchor index, and two unrelated short questions in one session would
+  // then carry the same key and read as one question to reconciliation.
+  it('a bare `Why?` keys its answer on the question words, never on an empty key', () => {
+    const anchor = extract('user-cases.jsonl').find((a) => a.uuid === 'a18');
+    expect(anchor?.key).toBe('why');
   });
 
   // Both halves of the Bash join fail quietly. The `|` inside the rg pattern is a shell operator

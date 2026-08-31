@@ -13,3 +13,7 @@
 {"type":"user","uuid":"u12","sessionId":"fix-users","timestamp":"2026-08-30T12:00:41.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_g1","content":"Exit code 0\n18:  const timeout = 30_000;"}]}}
 {"type":"user","uuid":"u13","sessionId":"fix-users","timestamp":"2026-08-30T12:00:50.000Z","message":{"role":"user","content":"can you also add the retry cap to the client"}}
 {"type":"assistant","uuid":"a14","sessionId":"fix-users","timestamp":"2026-08-30T12:00:55.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The client reads the cap from sync.json, so the change belongs there."}]}}
+{"type":"user","uuid":"u15","sessionId":"fix-users","timestamp":"2026-08-30T12:01:00.000Z","message":{"role":"user","content":"what's the cap on the archive writer"}}
+{"type":"assistant","uuid":"a16","sessionId":"fix-users","timestamp":"2026-08-30T12:01:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The archive writer takes its cap from the same setting the reconciler reads."}]}}
+{"type":"user","uuid":"u17","sessionId":"fix-users","timestamp":"2026-08-30T12:01:10.000Z","message":{"role":"user","content":"Why?"}}
+{"type":"assistant","uuid":"a18","sessionId":"fix-users","timestamp":"2026-08-30T12:01:15.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Because the writer batches under the cap, so a second setting would drift from the first one."}]}}

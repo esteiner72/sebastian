@@ -31,26 +31,38 @@ export function contentTokens(text: string): string[] {
 }
 
 // The normalized-question key: content tokens sorted and joined, so word order and phrasing
-// variation do not split identical questions.
+// variation do not split identical questions. Every interrogative is also a stopword, so a short
+// question ("Why?", "Is it?") has no content tokens at all and falls back to its own words: an
+// empty key indexes nothing in the anchor index and would make two unrelated answers look like one
+// question to reconciliation.
 export function questionKey(text: string): string {
-  return [...new Set(contentTokens(text))].sort().join(' ');
+  const tokens = [...new Set(contentTokens(text))].sort();
+  if (tokens.length > 0) return tokens.join(' ');
+  const words = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return words === '' ? text.trim().replace(/\s+/g, ' ') : words;
 }
 
 // Openers that mark a question on their own. `do` is the one auxiliary left out, measured over
 // 227 transcripts and 1,351 genuine user messages: every `do` opener without a `?` is an
 // imperative ("Do #2 while I sort out the access issue"), while every other auxiliary opener
 // without a `?` is a question, `can` alone accounting for 62 of them. `do` still qualifies
-// through the trailing `?`. A directive misread as a question surrenders its verbatim quote and
-// points `seb show` at the reply instead of the instruction, so the split is worth measuring.
+// through the trailing `?`. Both directions of error cost something: a directive read as a
+// question surrenders its verbatim quote and points `seb show` at the reply instead of the
+// instruction, and a question read as a directive loses the `answer` anchor entirely.
 const INTERROGATIVES = new Set([
-  'what', 'why', 'how', 'when', 'which', 'who', 'is', 'are', 'does', 'can', 'should',
+  'what', 'why', 'how', 'when', 'where', 'which', 'who',
+  'is', 'are', 'does', 'can', 'could', 'would', 'should',
 ]);
 
+// The opening token is cut at its apostrophe before the lookup, so `what's` and `where's` match
+// while `we're` and `don't` do not. Straight and typographic apostrophes both count, because
+// platforms substitute one for the other.
 export function isQuestion(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.endsWith('?')) return true;
   const first = trimmed.split(/\s+/, 1)[0]?.toLowerCase() ?? '';
-  return INTERROGATIVES.has(first.replace(/[^a-z]/g, ''));
+  const opener = first.split(/['\u2019]/, 1)[0]?.replace(/[^a-z]/g, '') ?? '';
+  return INTERROGATIVES.has(opener);
 }
 
 // Envelope tags whose whole span is machine content, not typed human text. Stripping is
