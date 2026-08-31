@@ -16,7 +16,6 @@ const BASE = [
 // carry a verdict for the rate to mean anything. Unreconciled anchors are outside both counts.
 const DROP_RATE_MIN = 0.5;
 const OBSERVED_MIN = 5;
-const MAX_LINES = 15;
 
 // Every type earns adaptive lines except `cmd`: a command-line key essentially never appears in a
 // summary, so its drop-rate pins at 1.0 and the line would be a constant — consistent with cmd's
@@ -46,7 +45,7 @@ interface TypeRate {
 export function computeSteering(db: DatabaseSync): string {
   const retrievals = countRetrievals(db);
   const adaptive = earnedRates(db).map((r) => adaptiveLine(r, retrievals.get(r.type) ?? 0));
-  return `${[...BASE, ...adaptive].slice(0, MAX_LINES).join('\n')}\n`;
+  return `${[...BASE, ...adaptive].join('\n')}\n`;
 }
 
 // Drop-rate is the primary signal and is dense: every anchor of every type takes a verdict every
