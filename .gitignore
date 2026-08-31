@@ -23,8 +23,8 @@ yarn-error.log*
 CLAUDE.local.md
 .claude/settings.local.json
 
-# etc.
+# Approved specs, kept local
 docs/specs/
 
-# the real eval corpus lives outside this repo
+# Real eval corpus, kept outside the repo
 eval/corpus-local/

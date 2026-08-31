@@ -5,7 +5,7 @@ Sebastian is a Claude Code plugin that makes compaction recoverable. He is also 
 When Claude Code compacts a conversation, a summary replaces the transcript. The raw transcript
 survives on disk, but nothing tells the model what the summary dropped, so it never looks. Sebastian
 archives the transcript, works out what the summary lost, and hands the model an index of the
-missing pieces along with the commands that retrieve them.
+missing pieces along with the commands that retrieve them. It makes the compaction a table of contents rather than a simple summary that replaces it.
 
 ## Status
 
