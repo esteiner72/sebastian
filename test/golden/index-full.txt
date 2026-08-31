@@ -1,0 +1,10 @@
+## Forgotten Index
+Dropped this cycle: 2 error, 1 answer, 1 edit, 1 user, 1 cmd, 1 read, 1 url (9 anchors reconciled).
+- t4e1 error: TypeError: cannot read properties of undefined (reading 'config') — seb show t4e1
+- t7e1 error: ENOENT: no such file or directory, open 'sebastian.db' — seb show t7e1
+- t12d1 edit: src/store/db.ts — seb show t12d1
+- t15r1 read: src/transcript/parse.ts — seb show t15r1
+- t18w1 url: https://example.com/docs/sqlite — seb show t18w1
+Possibly paraphrased — verify against the summary before retrieving:
+- t9a1 answer: WAL plus a 5-second busy timeout stops the second session failing instantly. — seb show t9a1
+Run `seb index --dropped` for the full list; `seb show <id>` retrieves an original.
