@@ -1,0 +1,9 @@
+{
+  "compactionTurn": 22,
+  "needed": [
+    "t3r1",
+    "t11d1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: EUR invoices are off by a cent about half the time; the conversion rounded before applying the spread. The user also asked to leave the spread maths alone, since pricing owns it.\n2. Key Files: src/fx/convert.ts (conversion order fixed — the spread now applies before the round), src/fx/spread.ts (read only, unchanged).\n3. Errors: one failing conversion assertion on the cent difference; cleared once the rounding moved.\n4. Commands: npm test -- fx (31 passing).\n5. Next: none pending."
+}

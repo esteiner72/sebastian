@@ -1,0 +1,13 @@
+{
+  "compactionTurn": 26,
+  "needed": [
+    "t1r1",
+    "t3r1",
+    "t5r1",
+    "t9r1",
+    "t11r1",
+    "t13r1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: Map the prod network wiring to find which CIDR ranges are in use before peering a new account. The user also fixed that prod CIDRs are allocated centrally and a module default is never widened.\n2. Key Files: infra/envs/prod/main.tf (prod instantiates the network module at 10.4.0.0/16).\n3. Errors: none.\n4. Commands: terraform validate (configuration valid).\n5. Next: none pending."
+}

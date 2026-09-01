@@ -1,0 +1,9 @@
+{
+  "compactionTurn": 18,
+  "needed": [
+    "t3r1",
+    "t5a1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: The user asked why the settlement job double-counts refunds on retries, then asked for the job to be made idempotent. They also required no new table — reuse the ledger entry ids.\n2. Key Files: src/settle/batch.ts (settlement now dedupes on the entry id before writing).\n3. Errors: none.\n4. Commands: npm test -- settle (24 passing).\n5. Next: none pending."
+}

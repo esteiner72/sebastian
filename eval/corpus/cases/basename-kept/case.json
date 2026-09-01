@@ -1,0 +1,11 @@
+{
+  "compactionTurn": 22,
+  "needed": [
+    "t1r1",
+    "t3r1",
+    "t7d1",
+    "t11d1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: Config layers applied backwards, so a project override lost to the default. The user also fixed the layer order as project over user over default, never to be reordered.\n2. Key Files: src/config/merge.ts (spread order flipped so the layer wins).\n3. Errors: the compiler rejected the reduce seed as an incomplete Config.\n4. Commands: npx tsc --noEmit (clean after the second edit).\n5. Next: none pending."
+}

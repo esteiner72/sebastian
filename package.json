@@ -42,6 +42,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
+    "eval:build": "tsc -p eval/tsconfig.json && cp src/store/schema.sql .eval-build/src/store/",
+    "eval": "npm run eval:build && node .eval-build/eval/harness.js",
+    "eval:baseline": "npm run eval:build && node .eval-build/eval/harness.js --write-baseline",
+    "eval:full": "npm run eval:build && node .eval-build/eval/harness.js --full",
     "check:manifest": "node scripts/check-manifest.mjs",
     "check:shapes": "node scripts/check-fixture-shapes.mjs"
   },

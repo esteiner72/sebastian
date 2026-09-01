@@ -1,0 +1,9 @@
+{
+  "compactionTurn": 22,
+  "needed": [
+    "t9r1",
+    "t11d1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: The user asked how a void differs from a refund in the settlement ledger, then asked for the void path to write the same audit row. They also required audit rows to be append-only, never updated in place.\n2. Key Files: src/ledger/entry.ts (void now appends an audit row), src/ledger/void.ts (read only).\n3. Errors: one failing ledger assertion that expected an audit row and saw none; cleared once the audit write moved.\n4. Commands: npm test -- ledger (26 passing).\n5. Next: none pending."
+}

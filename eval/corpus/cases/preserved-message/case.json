@@ -1,0 +1,9 @@
+{
+  "compactionTurn": 22,
+  "needed": [
+    "t3r1",
+    "t5d1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: Track down duplicate refund webhooks from the payment provider — the same refund lands twice after a 500 retry. The user also asked that the backoff numbers stay untouched, since ops tuned them.\n2. Key Files: src/webhooks/signature.ts (delivery verification, read only), src/webhooks/retry.ts (replay wrapper — the replay happens here, before deduplication runs).\n3. Errors: one failing webhook assertion that expected 1 recorded delivery and saw 2; cleared after the retry fix.\n4. Commands: npm test -- webhooks (18 passing).\n5. Next: none pending."
+}

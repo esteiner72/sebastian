@@ -1,0 +1,6 @@
+{
+  "compactionTurn": 22,
+  "needed": ["t1r1", "t5d1"],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: Fix the proration credit sign bug on plan downgrades — customer 4821 was charged 3.40 instead of credited. The user also set a rounding policy: credits round half-up in the customer's favor; charge rounding stays untouched.\n2. Key Files: src/billing/invoice.ts (settleDowngrade — removed the double negation so the credit applies with the right sign), src/billing/rounding.ts (shared round helper, unchanged).\n3. Errors: one failing assertion on the credit sign after the first edit; resolved by fixing the call site above.\n4. Commands: npm test -- proration (14 passing).\n5. Next: none pending."
+}

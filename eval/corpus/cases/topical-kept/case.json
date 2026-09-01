@@ -1,0 +1,11 @@
+{
+  "compactionTurn": 21,
+  "needed": [
+    "t1a1",
+    "t1r1",
+    "t6d1",
+    "t10d1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: Make the consumer lag metric ignore partitions the consumer no longer owns. The user also fixed the metric as a gauge, never a counter.\n2. Key Files: the consumer lag metric now filters the reduce to the current assignment.\n3. Errors: the build failed once because a helper was not exported.\n4. Commands: npm test -- consume (37 passing).\n5. Next: none pending."
+}

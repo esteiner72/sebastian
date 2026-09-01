@@ -1,0 +1,9 @@
+{
+  "compactionTurn": 19,
+  "needed": [
+    "t1a1",
+    "t1r1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: Align the cache evictor with the same window the freshness check uses, so a reloaded tile does not survive eviction. The user also forbade force-pushing this branch, because other people work on it.\n2. Key Files: cache/evict.go (eviction now calls the shared predicate).\n3. Errors: one commit attempt stopped on a leftover lock and went through on the retry.\n4. Commands: git commit -am (one file changed).\n5. Next: none pending."
+}

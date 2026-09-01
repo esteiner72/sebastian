@@ -1,0 +1,9 @@
+{
+  "compactionTurn": 20,
+  "needed": [
+    "t3r1",
+    "t9d1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: VAT resolves to 0% for Irish B2C customers while B2B is correct. The user also set a rule: country rates live only in the registry, never inlined elsewhere.\n2. Key Files: src/tax/vat.ts (B2C branch now resolves the country rate instead of defaulting to zero).\n3. Errors: one failing VAT assertion on the Irish B2C rate; cleared after the resolver change.\n4. Commands: npm test -- tax (19 passing).\n5. Next: none pending."
+}

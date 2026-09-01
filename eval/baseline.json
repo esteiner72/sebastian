@@ -1,0 +1,104 @@
+{
+  "generatedAt": "2026-09-01T03:16:42.670Z",
+  "commit": "7f907bc326a6c4b188ceb2ec7ec5fe2e3636ba07",
+  "aggregate": {
+    "recall": 0.875,
+    "precision": 0.7778,
+    "indexTokens": 108,
+    "recallPerKToken": 8.1019,
+    "steeringLift": 0.1
+  },
+  "perCase": {
+    "answer-reask": {
+      "recall": 1,
+      "precision": 1,
+      "indexTokens": 115,
+      "recallPerKToken": 8.6957,
+      "steeringLift": null
+    },
+    "artifact-reacquire": {
+      "recall": 1,
+      "precision": 0.6667,
+      "indexTokens": 109,
+      "recallPerKToken": 9.1743,
+      "steeringLift": null
+    },
+    "basename-kept": {
+      "recall": 0.5,
+      "precision": 0.6667,
+      "indexTokens": 119,
+      "recallPerKToken": 4.2017,
+      "steeringLift": null
+    },
+    "bash-reread": {
+      "recall": 1,
+      "precision": 1,
+      "indexTokens": 52,
+      "recallPerKToken": 19.2308,
+      "steeringLift": null
+    },
+    "digest-overflow": {
+      "recall": 0.8333,
+      "precision": 1,
+      "indexTokens": 137,
+      "recallPerKToken": 6.0825,
+      "steeringLift": null
+    },
+    "instruction-dropped": {
+      "recall": 1,
+      "precision": 1,
+      "indexTokens": 60,
+      "recallPerKToken": 16.6667,
+      "steeringLift": null
+    },
+    "mention-not-action": {
+      "recall": 1,
+      "precision": 0.6667,
+      "indexTokens": 106,
+      "recallPerKToken": 9.434,
+      "steeringLift": null
+    },
+    "nearmiss-reask": {
+      "recall": 1,
+      "precision": 0.6667,
+      "indexTokens": 137,
+      "recallPerKToken": 7.2993,
+      "steeringLift": null
+    },
+    "platform-restored": {
+      "recall": 1,
+      "precision": 0.6667,
+      "indexTokens": 106,
+      "recallPerKToken": 9.434,
+      "steeringLift": null
+    },
+    "preserved-message": {
+      "recall": 1,
+      "precision": 0.6667,
+      "indexTokens": 107,
+      "recallPerKToken": 9.3458,
+      "steeringLift": null
+    },
+    "topical-kept": {
+      "recall": 0.75,
+      "precision": 0.75,
+      "indexTokens": 128,
+      "recallPerKToken": 5.8594,
+      "steeringLift": null
+    },
+    "two-cycle": {
+      "recall": 1,
+      "precision": 1,
+      "indexTokens": 79,
+      "recallPerKToken": 12.6582,
+      "steeringLift": 0.1
+    },
+    "unmarked-reask": {
+      "recall": 1,
+      "precision": 0.6667,
+      "indexTokens": 145,
+      "recallPerKToken": 6.8966,
+      "steeringLift": null
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "compactionTurn": 22,
+  "needed": [
+    "t6r1"
+  ],
+  "instruction": "never write to the live psp sandbox from a test -- use the recorded fixtures under test/vcr, i mean it, ops got paged twice last month",
+  "summary": "1. Primary Request and Intent: Make the capture suite deterministic — it was reaching the payment provider sandbox during continuous integration and failing intermittently.\n2. Key Files: src/psp/capture.ts (capture flow rewired onto the cassette player), src/psp/client.ts (transport now honours the injected player).\n3. Errors: one failing capture assertion — the run expected a cassette hit but got a live request.\n4. Commands: npm test -- psp, 22 passing after the rewire.\n5. Next: none pending."
+}

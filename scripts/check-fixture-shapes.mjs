@@ -10,11 +10,13 @@
 // Exits 1 when a fixture asserts something the corpus does not support: a missing contract path,
 // an invented record type, an invented field path, or a leaf type the corpus never produces. An
 // uncovered corpus record type only reports: fixtures cover the types the loop reasons about.
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'test', 'fixtures');
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const FIXTURE_DIR = join(REPO_ROOT, 'test', 'fixtures');
+const EVAL_CORPUS_DIR = join(REPO_ROOT, 'eval', 'corpus');
 const MAX_DEPTH = 8;
 const MAX_LISTED = 15;
 
@@ -187,6 +189,21 @@ function jsonlIn(dir) {
     .map((name) => join(dir, name));
 }
 
+// The authored eval corpus makes the same claim about the real format that test fixtures do, so
+// its transcripts join the census on the fixture side of the diff.
+function authoredTranscripts() {
+  const files = [];
+  for (const tier of ['cases', 'violations']) {
+    const root = join(EVAL_CORPUS_DIR, tier);
+    if (!existsSync(root)) continue;
+    for (const entry of readdirSync(root)) {
+      const transcript = join(root, entry, 'transcript.jsonl');
+      if (existsSync(transcript)) files.push(transcript);
+    }
+  }
+  return files;
+}
+
 function main() {
   const corpusDir = process.argv[2] ?? process.env.SEBASTIAN_EVAL_CORPUS;
   if (corpusDir === undefined) {
@@ -195,7 +212,7 @@ function main() {
     process.exit(2);
   }
   const corpus = census(jsonlIn(corpusDir));
-  const fixtures = census(jsonlIn(FIXTURE_DIR));
+  const fixtures = census([...jsonlIn(FIXTURE_DIR), ...authoredTranscripts()]);
   console.log(
     `corpus: ${corpus.counts.size} record types, ${allPaths(corpus.shapes).size} field paths\n` +
       `fixtures: ${fixtures.counts.size} record types, ${allPaths(fixtures.shapes).size} field paths`,

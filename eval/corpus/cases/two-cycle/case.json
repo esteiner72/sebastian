@@ -1,0 +1,9 @@
+{
+  "compactionTurn": 45,
+  "needed": [
+    "t32r1",
+    "t34d1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: Stop the payout retry re-entering the same batch window. The user also required the Friday cutoff to stay at 17:00 UTC, since treasury depends on it.\n2. Key Files: src/payout/window.ts (window identity is now the claim key).\n3. Errors: none this cycle.\n4. Commands: npm test -- payout (27 passing).\n5. Next: none pending."
+}
