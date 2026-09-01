@@ -6,14 +6,14 @@ import { preCompact } from './hooks/preCompact.js';
 import { postCompact } from './hooks/postCompact.js';
 import { sessionStart } from './hooks/sessionStart.js';
 import { readStdin, runHook, type HookBody } from './hooks/runHook.js';
-import { dbPath, openDb, projectSlug } from './store/db.js';
+import { dbPath, maxTelemetryId, openDb, projectSlug, stampCommandMs } from './store/db.js';
 import { UsageError } from './cli/args.js';
 import { search } from './cli/search.js';
 import { show } from './cli/show.js';
 import { indexCommand } from './cli/index.js';
 import { timeline } from './cli/timeline.js';
 import { status } from './cli/status.js';
-import { report } from './cli/report.js';
+import { report, reportAll } from './cli/report.js';
 
 // The names hooks/run-hook.sh forwards, and the bodies they reach.
 const BODIES: Record<string, HookBody> = {
@@ -43,7 +43,7 @@ const USAGE = [
   '  seb index [--dropped|--all|--raw]',
   '  seb timeline [--cycle N]',
   '  seb status',
-  '  seb report',
+  '  seb report [--all]',
   '  seb hook <pre-compact|post-compact|session-start>',
   '',
 ].join('\n');
@@ -51,6 +51,12 @@ const USAGE = [
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   if (command === 'hook') return Promise.resolve(dispatchHook(rest[0]));
+  // `report --all` reads the archive root, not the working directory, so it bypasses the project
+  // resolution below — which would otherwise refuse from any directory that has never compacted.
+  if (command === 'report' && rest.includes('--all')) {
+    process.stdout.write(reportAll());
+    return Promise.resolve(0);
+  }
   return Promise.resolve(runCommand(command, rest));
 }
 
@@ -91,10 +97,17 @@ function runCommand(name: string | undefined, argv: string[]): number {
   return runAgainst(slug, name ?? '', run, argv);
 }
 
+// The command's own duration, measured around the whole invocation and stamped onto the telemetry
+// rows this invocation wrote. Rows are identified by id rather than by recency, because a command
+// may write none — `seb report` deliberately does — and the newest row would then belong to an
+// earlier retrieval.
 function runAgainst(slug: string, name: string, run: Command, argv: string[]): number {
   const db = openDb(slug);
+  const started = performance.now();
+  const before = maxTelemetryId(db);
   try {
     process.stdout.write(run(db, argv));
+    stampCommandMs(db, before, Math.round(performance.now() - started));
     return 0;
   } catch (err) {
     const reason = err instanceof UsageError ? err.message : String(err);

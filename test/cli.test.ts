@@ -79,6 +79,7 @@ function reconcileFixture(db: DatabaseSync): void {
   recordCycle(db, {
     sessionId: 'fix-seven',
     cycle: 0,
+    compactionMs: null,
     trigger: 'manual',
     summary: 'The sync retry loop was repaired.',
   });
@@ -252,16 +253,18 @@ describe('cli retrieval', () => {
     const parsed = JSON.parse(report(db, [])) as {
       schema: number;
       env: Record<string, string>;
-      data: { totals: Record<string, number> };
+      projects: { project: string; data: { totals: Record<string, number> } }[];
     };
+    const entry = parsed.projects[0];
 
     // The archive's size on disk is not reproducible, so it is asserted rather than pinned.
-    expect(parsed.data.totals.dbBytes).toBeGreaterThan(0);
-    delete parsed.data.totals.dbBytes;
+    expect(entry?.data.totals.dbBytes).toBeGreaterThan(0);
+    delete entry?.data.totals.dbBytes;
 
-    expect(parsed.schema).toBe(1);
-    expect(parsed.data).toEqual(JSON.parse(golden('report-data.json')));
-    expect(parsed.env.project).toMatch(/^[0-9a-f]{12}$/);
+    expect(parsed.schema).toBe(2);
+    expect(parsed.projects).toHaveLength(1);
+    expect(entry?.data).toEqual(JSON.parse(golden('report-data.json')));
+    expect(entry?.project).toMatch(/^[0-9a-f]{12}$/);
     expect(report(db, [])).not.toContain(CANARY);
     db.close();
   });
@@ -275,10 +278,13 @@ describe('cli retrieval', () => {
     empty.close();
 
     const db = tempDb('seb-cli-hooks-all-');
+    // Only the rows carrying an ms count as invocations; a body's own row does not.
     logEvent(db, 'pre-compact', 'info', 'archived 12 messages');
+    logEvent(db, 'pre-compact', 'info', 'complete', 120);
+    logEvent(db, 'pre-compact', 'info', 'complete', 240);
     logEvent(db, 'pre-compact', 'warn', 'no transcript to archive; steering only');
-    logEvent(db, 'post-compact', 'info', 'cycle 0: 9 verdicts persisted');
-    logEvent(db, 'session-start', 'info', 'cycle 0: reconciled index');
+    logEvent(db, 'post-compact', 'info', 'complete', 90);
+    logEvent(db, 'session-start', 'info', 'complete', 15);
     const text = status(db, []);
 
     expect(text).toContain('Hooks: pre-compact 2 runs, post-compact 1 run, session-start 1 run;');
@@ -363,36 +369,41 @@ function seedForReport(db: DatabaseSync): void {
   }
 
   const cycleRows = [
-    ['s-alpha', 0, 'auto', '2026-09-01T11:00:00.000Z', 118],
-    ['s-alpha', 1, 'manual', '2026-09-01T11:30:00.000Z', 0],
-    ['s-beta', 0, 'auto', null, null],
+    ['s-alpha', 0, 'auto', '2026-09-01T11:00:00.000Z', 118, 138204],
+    ['s-alpha', 1, 'manual', '2026-09-01T11:30:00.000Z', 0, null],
+    ['s-beta', 0, 'auto', null, null, null],
   ] as const;
   const cycle = db.prepare(
-    'INSERT INTO cycles (session_id, cycle, trigger, reconciled_at, summary, injected_tokens) ' +
-      'VALUES (?, ?, ?, ?, ?, ?)',
-  );
-  for (const [session, n, trigger, reconciledAt, tokens] of cycleRows) {
-    cycle.run(session, n, trigger, reconciledAt, CANARY, tokens);
-  }
-
-  const telemetry = [
-    ['search', 'error', 3], ['search', 'error', 0], ['show', 'answer', 1], ['status', null, 0],
-  ] as const;
-  const row = db.prepare(
-    'INSERT INTO telemetry (ts, cmd, anchor_type, session_id, anchor_id, hits, cycle) ' +
+    'INSERT INTO cycles (session_id, cycle, trigger, reconciled_at, summary, injected_tokens, compaction_ms) ' +
       'VALUES (?, ?, ?, ?, ?, ?, ?)',
   );
-  for (const [cmd, type, hits] of telemetry) {
-    row.run('2026-09-01T11:40:00.000Z', cmd, type, null, null, hits, 1);
+  for (const [session, n, trigger, reconciledAt, tokens, compactionMs] of cycleRows) {
+    cycle.run(session, n, trigger, reconciledAt, CANARY, tokens, compactionMs);
   }
 
-  const events = [
-    ['pre-compact', 'info', '2026-09-01T10:00:00.000Z'],
-    ['pre-compact', 'info', '2026-09-01T11:00:00.000Z'],
-    ['pre-compact', 'warn', '2026-09-01T12:00:00.000Z'],
-    ['post-compact', 'info', '2026-09-01T11:05:00.000Z'],
-    ['session-start', 'info', '2026-09-01T11:06:00.000Z'],
+  // The status row carries no duration: a command whose invocation was never stamped still counts,
+  // and its absence must read as null rather than as zero.
+  const telemetry = [
+    ['search', 'error', 3, 20], ['search', 'error', 0, 40],
+    ['show', 'answer', 1, 8], ['status', null, 0, null],
   ] as const;
-  const event = db.prepare('INSERT INTO log (ts, hook, level, msg) VALUES (?, ?, ?, ?)');
-  for (const [hook, level, ts] of events) event.run(ts, hook, level, CANARY);
+  const row = db.prepare(
+    'INSERT INTO telemetry (ts, cmd, anchor_type, session_id, anchor_id, hits, cycle, ms) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  for (const [cmd, type, hits, ms] of telemetry) {
+    row.run('2026-09-01T11:40:00.000Z', cmd, type, null, null, hits, 1, ms);
+  }
+
+  // Only a timed row is an invocation. The warn row is one a hook body wrote, so it carries no
+  // duration and must not inflate the run count.
+  const events = [
+    ['pre-compact', 'info', '2026-09-01T10:00:00.000Z', 120],
+    ['pre-compact', 'info', '2026-09-01T11:00:00.000Z', 240],
+    ['pre-compact', 'warn', '2026-09-01T12:00:00.000Z', null],
+    ['post-compact', 'info', '2026-09-01T11:05:00.000Z', 90],
+    ['session-start', 'info', '2026-09-01T11:06:00.000Z', 15],
+  ] as const;
+  const event = db.prepare('INSERT INTO log (ts, hook, level, msg, ms) VALUES (?, ?, ?, ?, ?)');
+  for (const [hook, level, ts, ms] of events) event.run(ts, hook, level, CANARY, ms);
 }

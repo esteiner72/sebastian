@@ -1,9 +1,11 @@
 import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite';
-import { archiveBytes, databaseFile, hookStats, storeStats } from '../store/db.js';
+import {
+  archiveBytes, archiveRoot, commandStats, databaseFile, hookStats, openDbAt, storeStats,
+} from '../store/db.js';
 import { UNCERTAIN_MAX, UNCERTAIN_MIN } from '../reconcile/render.js';
 import { usageWrap } from './args.js';
 
@@ -21,32 +23,78 @@ import { usageWrap } from './args.js';
 //     most one per anchor type, one per (cmd, type, cycle) triple.
 //   - No telemetry row. This command reads the telemetry table, so recording its own visit would
 //     change the measurement and make two consecutive runs disagree.
-const SCHEMA = 1;
+const SCHEMA = 2;
 
+// One project, the one the working directory names.
 export function report(db: DatabaseSync, argv: string[]): string {
   usageWrap(() => parseArgs({ args: argv, options: {} }));
-  return `${JSON.stringify({ schema: SCHEMA, env: env(db), data: data(db) }, null, 2)}\n`;
+  return document([projectEntry(db)]);
 }
 
-// Everything needed to know whether one tester's numbers are comparable with another's. The project
-// hash lives here rather than beside the measurements because it identifies the machine, not the
-// behaviour — which also keeps `data` free of anything that varies by where the archive sits.
-function env(db: DatabaseSync): Record<string, string> {
+// Every archive on the machine. A tester works in several repositories and each has its own archive,
+// so a single-project report cannot collect a machine — and only the archive root knows which
+// projects exist. Routed in `main` rather than through a flag on the command, because it reads the
+// root instead of the working directory.
+export function reportAll(): string {
+  return document(archives().map(entryFor));
+}
+
+// A project that cannot be opened reports the reason in place of its data. Aborting the run would
+// lose every archive after the broken one, which is the whole failure this export exists to avoid.
+function entryFor(path: string): Record<string, unknown> {
+  let db: DatabaseSync | null = null;
+  try {
+    db = openDbAt(path);
+    return projectEntry(db);
+  } catch (err) {
+    return { project: hash(basename(dirname(path)), 12), error: String(err) };
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // A close failure cannot invalidate an entry that was already built.
+    }
+  }
+}
+
+// Only archives that already exist. `openDbAt` creates what it opens, so an unfiltered listing would
+// manufacture an empty database for every stray entry under the root and report it as a project.
+function archives(): string[] {
+  const root = archiveRoot();
+  try {
+    return readdirSync(root)
+      .map((slug) => join(root, slug, 'sebastian.db'))
+      .filter((path) => existsSync(path));
+  } catch {
+    return [];
+  }
+}
+
+function document(projects: Record<string, unknown>[]): string {
+  return `${JSON.stringify({ schema: SCHEMA, env: env(), projects }, null, 2)}\n`;
+}
+
+// Everything needed to know whether one tester's numbers are comparable with another's. It describes
+// the machine, so it sits once at the top rather than repeating inside every project.
+function env(): Record<string, string> {
   return {
     sebastian: version(),
     node: process.version,
     platform: process.platform,
-    project: hash(projectOf(db), 12),
   };
 }
 
-function data(db: DatabaseSync): Record<string, unknown> {
+function projectEntry(db: DatabaseSync): Record<string, unknown> {
   return {
-    totals: totals(db),
-    hooks: hookStats(db),
-    cycles: cycles(db),
-    byType: byType(db),
-    retrievals: retrievals(db),
+    project: hash(projectOf(db), 12),
+    data: {
+      totals: totals(db),
+      hooks: hookStats(db),
+      cycles: cycles(db),
+      byType: byType(db),
+      retrievals: retrievals(db),
+      commands: commandStats(db),
+    },
   };
 }
 
@@ -71,7 +119,7 @@ function cycles(db: DatabaseSync): Record<string, unknown>[] {
     'SELECT COUNT(*) FROM anchors a WHERE a.session_id = c.session_id AND a.cycle = c.cycle';
   const rows = db
     .prepare(
-      'SELECT c.session_id, c.cycle, c.trigger, c.injected_tokens, ' +
+      'SELECT c.session_id, c.cycle, c.trigger, c.injected_tokens, c.compaction_ms, ' +
         `(${counted}) AS anchors, ` +
         `(${counted} AND a.verdict IS NOT NULL) AS reconciled, ` +
         `(${counted} AND a.verdict = 'dropped') AS dropped ` +
@@ -86,6 +134,7 @@ function cycles(db: DatabaseSync): Record<string, unknown>[] {
     reconciled: Number(r.reconciled),
     dropped: Number(r.dropped),
     injectedTokens: intOrNull(r.injected_tokens),
+    compactionMs: intOrNull(r.compaction_ms),
   }));
 }
 

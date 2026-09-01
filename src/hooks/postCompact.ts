@@ -27,7 +27,7 @@ export function postCompact(db: DatabaseSync, payload: Payload): string {
   const summary = readSummary(payload, events, boundary);
   const sessionId = str(payload.session_id) ?? transcriptSession(events) ?? '';
   const trigger = hookTrigger(payload) ?? boundary.trigger;
-  recordCycle(db, { sessionId, cycle: boundary.cycle, trigger, summary });
+  recordCycle(db, { sessionId, cycle: boundary.cycle, trigger, summary, compactionMs: boundary.durationMs });
   const anchors = extractAnchors(events);
   archiveDelta(db, events, anchors);
   reconcileCycle(db, anchors, summary, boundary);

@@ -19,6 +19,7 @@ export interface Boundary {
   uuid: string;
   cycle: number;
   trigger: string | null;
+  durationMs: number | null;
   preservedUuids: Set<string>;
   restoredPaths: Set<string>;
 }
@@ -80,9 +81,16 @@ export function readBoundaries(events: TranscriptEvent[]): Boundary[] {
     uuid: event.uuid ?? '',
     cycle: event.cycle,
     trigger: str(obj(event.record?.compactMetadata)?.trigger),
+    durationMs: finiteNumber(obj(event.record?.compactMetadata)?.durationMs),
     preservedUuids: preservedUuids(event),
     restoredPaths: restoredPaths(events, event.turn),
   }));
+}
+
+// The platform reports how long it spent compacting. An older binary may omit it, so absence is a
+// null rather than a zero: zero would read as an instant compaction.
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function preservedUuids(event: TranscriptEvent): Set<string> {

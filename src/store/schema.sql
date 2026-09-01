@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS anchors (
 
 -- `injected_tokens` is what SessionStart spent on this cycle's Forgotten Index. Zero means the
 -- cycle dropped nothing and the hook rendered nothing; NULL means SessionStart never ran for it, so
--- the two cases stay distinguishable.
+-- the two cases stay distinguishable. `compaction_ms` is the platform's own reported duration for
+-- this compaction, which makes Sebastian's share of it arithmetic rather than an argument.
 CREATE TABLE IF NOT EXISTS cycles (
   session_id      TEXT NOT NULL,
   cycle           INTEGER NOT NULL,
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS cycles (
   reconciled_at   TEXT,
   summary         TEXT,
   injected_tokens INTEGER,
+  compaction_ms   INTEGER,
   PRIMARY KEY (session_id, cycle)
 );
 
@@ -61,11 +63,16 @@ CREATE TABLE IF NOT EXISTS telemetry (
   session_id  TEXT,                     -- with anchor_id, references anchors(session_id, id)
   anchor_id   TEXT,
   hits        INTEGER,
-  cycle       INTEGER                   -- attributed, not observed; see above
+  cycle       INTEGER,                  -- attributed, not observed; see above
+  ms          INTEGER                   -- whole-invocation duration, stamped after the command returns
 );
 
-CREATE TABLE IF NOT EXISTS log (        -- fail-open diagnostics; hooks never print to stdout
-  id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, hook TEXT, level TEXT, msg TEXT
+-- Fail-open diagnostics; hooks never print to stdout. `ms` is set on exactly one row per hook
+-- invocation, the row runHook writes when the body returns or throws, so counting rows with an `ms`
+-- counts invocations. A row a hook body writes carries its own message and leaves `ms` null.
+CREATE TABLE IF NOT EXISTS log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, hook TEXT, level TEXT, msg TEXT,
+  ms INTEGER
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS anchors_fts  USING fts5(key, excerpt, content='anchors',  content_rowid='rowid');

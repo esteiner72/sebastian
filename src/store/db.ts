@@ -11,8 +11,12 @@ export function projectSlug(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
+export function archiveRoot(): string {
+  return join(homedir(), '.claude', 'sebastian');
+}
+
 export function dbPath(slug: string): string {
-  return join(homedir(), '.claude', 'sebastian', slug, 'sebastian.db');
+  return join(archiveRoot(), slug, 'sebastian.db');
 }
 
 export function openDb(slug: string): DatabaseSync {
@@ -43,6 +47,9 @@ export function openDbAt(path: string): DatabaseSync {
 const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
   ['telemetry', 'cycle', 'INTEGER'],
   ['cycles', 'injected_tokens', 'INTEGER'],
+  ['log', 'ms', 'INTEGER'],
+  ['telemetry', 'ms', 'INTEGER'],
+  ['cycles', 'compaction_ms', 'INTEGER'],
 ];
 
 export function migrateColumns(db: DatabaseSync): void {
@@ -349,6 +356,7 @@ export interface CycleRecord {
   cycle: number;
   trigger: string | null;
   summary: string | null;
+  compactionMs: number | null;
 }
 
 // PostCompact is the only writer of cycles rows, and it writes after reconciling — hence the
@@ -359,8 +367,9 @@ export interface CycleRecord {
 export function recordCycle(db: DatabaseSync, c: CycleRecord): void {
   const reconciledAt = c.summary === null ? null : new Date().toISOString();
   db.prepare(
-    'INSERT OR REPLACE INTO cycles (session_id, cycle, trigger, summary, reconciled_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(c.sessionId, c.cycle, c.trigger, c.summary, reconciledAt);
+    'INSERT OR REPLACE INTO cycles (session_id, cycle, trigger, summary, reconciled_at, compaction_ms) ' +
+      'VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(c.sessionId, c.cycle, c.trigger, c.summary, reconciledAt, c.compactionMs);
 }
 
 // One verdict per anchor, in one transaction: a half-written cycle would feed drop-rate a
@@ -500,6 +509,35 @@ export interface HookStat {
   runs: number;
   warns: number;
   lastRun: string | null;
+  meanMs: number | null;
+  maxMs: number | null;
+  p95Ms: number | null;
+}
+
+export interface Timing {
+  meanMs: number | null;
+  maxMs: number | null;
+  p95Ms: number | null;
+}
+
+// One summary of a duration list, shared by hook and command timing. SQLite has no percentile
+// function, and the population is at most a few thousand rows, so the sort happens here. p95 takes
+// the value at the 95th percentile position rather than interpolating: with a handful of samples an
+// interpolated figure invents precision the data does not have.
+export function summarize(values: number[]): Timing {
+  if (values.length === 0) return { meanMs: null, maxMs: null, p95Ms: null };
+  const sorted = [...values].sort((a, b) => a - b);
+  const total = sorted.reduce((sum, v) => sum + v, 0);
+  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1);
+  return {
+    meanMs: round2(total / sorted.length),
+    maxMs: sorted[sorted.length - 1] ?? null,
+    p95Ms: sorted[index] ?? null,
+  };
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 // Every hook logs a row on every path, so this table is also the install check: no row for a hook
@@ -511,20 +549,57 @@ const HOOK_ORDER = ['pre-compact', 'post-compact', 'session-start'];
 export function hookStats(db: DatabaseSync): HookStat[] {
   const rows = db
     .prepare(
-      "SELECT hook, COUNT(*) AS runs, SUM(level = 'warn') AS warns, MAX(ts) AS last_run " +
+      "SELECT hook, COUNT(ms) AS runs, SUM(level != 'info') AS warns, MAX(ts) AS last_run " +
         'FROM log WHERE hook IS NOT NULL GROUP BY hook',
     )
     .all();
   const byHook = new Map(rows.map((r) => [String(r.hook), r]));
-  return HOOK_ORDER.filter((hook) => byHook.has(hook)).map((hook) => {
-    const row = byHook.get(hook);
-    return {
-      hook,
-      runs: Number(row?.runs ?? 0),
-      warns: Number(row?.warns ?? 0),
-      lastRun: (row?.last_run as string | null) ?? null,
-    };
-  });
+  return HOOK_ORDER.filter((hook) => byHook.has(hook)).map((hook) => ({
+    hook,
+    runs: Number(byHook.get(hook)?.runs ?? 0),
+    warns: Number(byHook.get(hook)?.warns ?? 0),
+    lastRun: (byHook.get(hook)?.last_run as string | null) ?? null,
+    ...summarize(durations(db, 'SELECT ms FROM log WHERE hook = ? AND ms IS NOT NULL', hook)),
+  }));
+}
+
+// A duration list for one group. Kept separate from the counting query because a percentile needs
+// the values themselves, not an aggregate over them.
+function durations(db: DatabaseSync, sql: string, key: string): number[] {
+  return db.prepare(sql).all(key).map((r) => Number(r.ms));
+}
+
+export interface CommandStat {
+  cmd: string;
+  count: number;
+  meanMs: number | null;
+  maxMs: number | null;
+  p95Ms: number | null;
+}
+
+// Retrieval latency belongs to the command, not to the (cmd, type, cycle) grouping `retrievals`
+// uses: a dozen searches split across triples answers nothing about how long a search takes.
+export function commandStats(db: DatabaseSync): CommandStat[] {
+  const cmds = db
+    .prepare('SELECT cmd, COUNT(*) AS n FROM telemetry GROUP BY cmd ORDER BY cmd')
+    .all();
+  return cmds.map((row) => ({
+    cmd: String(row.cmd),
+    count: Number(row.n),
+    ...summarize(durations(db, 'SELECT ms FROM telemetry WHERE cmd = ? AND ms IS NOT NULL', String(row.cmd))),
+  }));
+}
+
+// A command writes its telemetry row partway through its own body, so its duration is known only
+// after it returns. The id taken before the command runs is what keeps the stamp honest: `seb report`
+// writes no row at all, and updating the newest row blindly would credit its duration to somebody
+// else's retrieval.
+export function maxTelemetryId(db: DatabaseSync): number {
+  return Number(db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM telemetry').get()?.id ?? 0);
+}
+
+export function stampCommandMs(db: DatabaseSync, afterId: number, ms: number): void {
+  db.prepare('UPDATE telemetry SET ms = ? WHERE id > ?').run(ms, afterId);
 }
 
 // The database plus its write-ahead log: the log holds committed rows that have not been
@@ -542,11 +617,15 @@ function fileBytes(path: string): number {
   }
 }
 
-export function logEvent(db: DatabaseSync, hook: string, level: string, msg: string): void {
-  db.prepare('INSERT INTO log (ts, hook, level, msg) VALUES (?, ?, ?, ?)').run(
+// `ms` is passed only by runHook, once per invocation. Everything else logs without one.
+export function logEvent(
+  db: DatabaseSync, hook: string, level: string, msg: string, ms?: number,
+): void {
+  db.prepare('INSERT INTO log (ts, hook, level, msg, ms) VALUES (?, ?, ?, ?, ?)').run(
     new Date().toISOString(),
     hook,
     level,
     msg,
+    ms ?? null,
   );
 }

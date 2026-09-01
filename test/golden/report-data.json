@@ -8,9 +8,33 @@
     "reconciledCycles": 2
   },
   "hooks": [
-    { "hook": "pre-compact", "runs": 3, "warns": 1, "lastRun": "2026-09-01T12:00:00.000Z" },
-    { "hook": "post-compact", "runs": 1, "warns": 0, "lastRun": "2026-09-01T11:05:00.000Z" },
-    { "hook": "session-start", "runs": 1, "warns": 0, "lastRun": "2026-09-01T11:06:00.000Z" }
+    {
+      "hook": "pre-compact",
+      "runs": 2,
+      "warns": 1,
+      "lastRun": "2026-09-01T12:00:00.000Z",
+      "meanMs": 180,
+      "maxMs": 240,
+      "p95Ms": 240
+    },
+    {
+      "hook": "post-compact",
+      "runs": 1,
+      "warns": 0,
+      "lastRun": "2026-09-01T11:05:00.000Z",
+      "meanMs": 90,
+      "maxMs": 90,
+      "p95Ms": 90
+    },
+    {
+      "hook": "session-start",
+      "runs": 1,
+      "warns": 0,
+      "lastRun": "2026-09-01T11:06:00.000Z",
+      "meanMs": 15,
+      "maxMs": 15,
+      "p95Ms": 15
+    }
   ],
   "cycles": [
     {
@@ -20,7 +44,8 @@
       "anchors": 4,
       "reconciled": 4,
       "dropped": 3,
-      "injectedTokens": 118
+      "injectedTokens": 118,
+      "compactionMs": 138204
     },
     {
       "cycle": 1,
@@ -29,7 +54,8 @@
       "anchors": 0,
       "reconciled": 0,
       "dropped": 0,
-      "injectedTokens": 0
+      "injectedTokens": 0,
+      "compactionMs": null
     },
     {
       "cycle": 0,
@@ -38,7 +64,8 @@
       "anchors": 1,
       "reconciled": 0,
       "dropped": 0,
-      "injectedTokens": null
+      "injectedTokens": null,
+      "compactionMs": null
     }
   ],
   "byType": [
@@ -50,5 +77,10 @@
     { "cmd": "search", "type": "error", "cycle": 1, "count": 2, "withHits": 1 },
     { "cmd": "show", "type": "answer", "cycle": 1, "count": 1, "withHits": 1 },
     { "cmd": "status", "type": null, "cycle": 1, "count": 1, "withHits": 0 }
+  ],
+  "commands": [
+    { "cmd": "search", "count": 2, "meanMs": 30, "maxMs": 40, "p95Ms": 40 },
+    { "cmd": "show", "count": 1, "meanMs": 8, "maxMs": 8, "p95Ms": 8 },
+    { "cmd": "status", "count": 1, "meanMs": null, "maxMs": null, "p95Ms": null }
   ]
 }

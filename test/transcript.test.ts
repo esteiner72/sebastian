@@ -63,6 +63,7 @@ describe('boundary fixture', () => {
       uuid: 'b6',
       cycle: 0,
       trigger: 'manual',
+      durationMs: 50,
       preservedUuids: new Set(['u0', 'a1']),
       restoredPaths: new Set(['/repo/src/parser/index.ts', '/repo/src/parser/tokens.ts']),
     });
@@ -70,6 +71,7 @@ describe('boundary fixture', () => {
       uuid: 'b15',
       cycle: 1,
       trigger: 'auto',
+      durationMs: 60,
       preservedUuids: new Set(['u14']),
       restoredPaths: new Set(['/repo/src/parser/lex.ts']),
     });

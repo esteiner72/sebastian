@@ -25,28 +25,40 @@ export function readStdin(): string {
 
 // Fail-open, by contract with every hook event Sebastian registers: catch everything, return the
 // empty string, and let the caller exit 0. Nothing here throws, so no hook can break compaction.
+// Timing rides here rather than in the bodies, because this is the only place that sees a whole
+// invocation including the database open and the failure path. Exactly one row per invocation
+// carries an `ms`, which is what makes counting them equal to counting invocations.
 export function runHook(name: string, body: HookBody, stdin: string): string {
+  const started = performance.now();
   let payload: Payload = {};
   let db: DatabaseSync | null = null;
   try {
     payload = parsePayload(stdin);
     db = openDb(projectSlug(str(payload.cwd) ?? process.cwd()));
-    return body(db, payload);
+    const out = body(db, payload);
+    logEvent(db, name, 'info', 'complete', elapsed(started));
+    return out;
   } catch (err) {
-    return reportFailure(name, payload, db, err);
+    return reportFailure(name, payload, db, err, elapsed(started));
   } finally {
     closeQuietly(db);
   }
 }
 
+function elapsed(started: number): number {
+  return Math.round(performance.now() - started);
+}
+
 // The diagnostic write shares every failure mode with the write it reports — a locked, missing, or
 // read-only database — so it is best-effort, and stderr carries the reason either way. Diagnostics
 // never touch stdout: for PreCompact and SessionStart that channel is a protocol.
-function reportFailure(name: string, payload: Payload, db: DatabaseSync | null, err: unknown): string {
+function reportFailure(
+  name: string, payload: Payload, db: DatabaseSync | null, err: unknown, ms: number,
+): string {
   process.stderr.write(`sebastian: ${name}: ${String(err)}\n`);
   try {
     const target = db ?? openDb(projectSlug(str(payload.cwd) ?? process.cwd()));
-    logEvent(target, name, 'error', String(err));
+    logEvent(target, name, 'error', String(err), ms);
     if (target !== db) target.close();
   } catch (logErr) {
     process.stderr.write(`sebastian: ${name}: log write failed: ${String(logErr)}\n`);
