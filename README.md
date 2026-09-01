@@ -1,6 +1,7 @@
 # Sebastian
 
 [![CI](https://github.com/esteiner72/sebastian/actions/workflows/ci.yml/badge.svg)](https://github.com/esteiner72/sebastian/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/sebastian-cc)](https://www.npmjs.com/package/sebastian-cc)
 [![License](https://img.shields.io/github/license/esteiner72/sebastian)](LICENSE)
 [![Node](https://img.shields.io/badge/node-22.16%2B%20%7C%2024%2B-brightgreen)](#requirements)
 
@@ -14,8 +15,8 @@ the archive instead of a replacement for it.
 
 ## Status
 
-Pre-release. You can install it from source today, but the package is not published to npm and
-nothing about it is stable yet.
+Pre-release. You can install it from source today. Release candidates are published to npm under the
+`next` tag with provenance, but nothing about the plugin is stable yet.
 
 ## Requirements
 
