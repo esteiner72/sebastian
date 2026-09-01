@@ -61,3 +61,12 @@ CREATE TABLE IF NOT EXISTS log (        -- fail-open diagnostics; hooks never pr
 
 CREATE VIRTUAL TABLE IF NOT EXISTS anchors_fts  USING fts5(key, excerpt, content='anchors',  content_rowid='rowid');
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(record,       content='messages', content_rowid='rowid');
+
+-- Retrieval paths that no primary key serves. `messages` keys on uuid alone, so a turn lookup would
+-- scan every archived record; the anchors primary key leads on session_id, so a bare id would scan
+-- the whole table. Archives outlive transcript cleanup and accumulate every session of a project,
+-- so these scans grow without bound.
+CREATE INDEX IF NOT EXISTS messages_session_turn ON messages(session_id, turn);  -- seb show; also covers the distinct-session count
+CREATE INDEX IF NOT EXISTS messages_cycle_turn   ON messages(cycle, turn);       -- seb show <cycle:turn>
+CREATE INDEX IF NOT EXISTS anchors_id            ON anchors(id);                 -- seb show on an unqualified anchor id
+CREATE INDEX IF NOT EXISTS anchors_session_cycle ON anchors(session_id, cycle, turn);  -- the injected index, in turn order

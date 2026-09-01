@@ -105,13 +105,26 @@ function countsLine(dropped: Entry[], total: number): string {
 // Entries are taken in fill order and cut from its end until the estimate fits the budget; the
 // header, counts, and pointer always render, so an over-budget cycle still reports what it cannot
 // list. What survives renders in display order.
+//
+// The cut is found by binary search, which the render permits: one more entry appends one line, and
+// at most once the uncertain heading, so the rendered length never falls as the count rises.
 function fitToBudget(entries: Entry[], chrome: Chrome, budget: number): string {
   const fill = roundRobin(entries);
-  for (let n = fill.length; n > 0; n -= 1) {
-    const text = renderText(fill.slice(0, n).sort(byPriority), chrome);
-    if (estimateTokens(text) <= budget) return text;
+  const firstN = (n: number): string => renderText(fill.slice(0, n).sort(byPriority), chrome);
+  let low = 0;
+  let high = fill.length;
+  let best = firstN(0);
+  while (low < high) {
+    const n = Math.ceil((low + high) / 2);
+    const text = firstN(n);
+    if (estimateTokens(text) <= budget) {
+      best = text;
+      low = n;
+    } else {
+      high = n - 1;
+    }
   }
-  return renderText([], chrome);
+  return best;
 }
 
 function renderText(entries: Entry[], chrome: Chrome): string {
