@@ -88,6 +88,11 @@ cycle justifies.
 Within a type the most recent entry comes first, so the work nearest the compaction is the work
 the index names.
 
+The eval harness in `eval/` is a regression gate over a proxy: synthetic sessions with recorded
+summaries, scored on what the index recovers per token. Whether the index helps in live use is a
+separate claim, tested by the author in sessions with and without the plugin, and no result is
+claimed here yet.
+
 A bundled skill teaches the model to resolve an entry against the summary it already holds and to
 retrieve only what is genuinely missing.
 
