@@ -32,6 +32,6 @@ jobs:
       - run: npm run build
       - run: npm run lint
       - run: npm test
-      # npm run eval joins these steps when the eval harness lands (repo-hardening Task 7).
+      - run: npm run eval
       # claude plugin validate --strict runs in the release workflow only (repo-hardening Task 6).
       - run: npm run check:manifest
