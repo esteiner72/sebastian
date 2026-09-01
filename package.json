@@ -20,6 +20,7 @@
     "dist",
     "hooks",
     "skills",
+    ".claude-plugin",
     "README.md",
     "LICENSE"
   ],
