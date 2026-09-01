@@ -1,0 +1,9 @@
+{
+  "compactionTurn": 18,
+  "needed": [
+    "t1r1",
+    "t5d1"
+  ],
+  "instruction": null,
+  "summary": "1. Primary Request and Intent: Friday payouts went out twice for 12 merchants; the batch is scheduled twice. The user also required the batch window to stay in UTC everywhere.\n2. Key Files: src/payout/batch.ts (the batch now claims its window before building).\n3. Errors: one failing payout assertion on the duplicate run.\n4. Commands: the payout suite passes.\n5. Next: none pending."
+}

@@ -189,19 +189,26 @@ interface Evidence {
   userTexts: string[];
 }
 
-// The evidence window is everything after the boundary except the summary records and the
-// file-restoration blocks: a genuine re-acquisition is an action the session took, and nothing in
-// those spans is one.
+// The evidence window runs from the boundary to the next boundary, exclusive, or to the end of the
+// file, except the summary records and the file-restoration blocks: a genuine re-acquisition is an
+// action the session took, and nothing in those spans is one. Anything after the next boundary is
+// attributable to that cycle's summary, not this one's.
 function collectEvidence(events: TranscriptEvent[], turn: number): Evidence {
   const excluded = excludedTurns(events);
+  const end = windowEnd(events, turn);
   const evidence: Evidence = { toolPaths: [], commands: [], userTexts: [] };
   for (const event of events) {
-    if (event.turn <= turn || excluded.has(event.turn)) continue;
+    if (event.turn <= turn || event.turn >= end || excluded.has(event.turn)) continue;
     if (event.type === 'assistant') collectToolInputs(event, evidence);
     const text = genuineUserText(event);
     if (text !== null) evidence.userTexts.push(text);
   }
   return evidence;
+}
+
+function windowEnd(events: TranscriptEvent[], turn: number): number {
+  const next = events.find((event) => event.turn > turn && isBoundary(event));
+  return next === undefined ? events.length : next.turn;
 }
 
 function excludedTurns(events: TranscriptEvent[]): Set<number> {
@@ -272,9 +279,10 @@ export function deriveNeededAnswers(events: TranscriptEvent[], boundary: Boundar
 
 function postBoundaryQuestions(events: TranscriptEvent[], turn: number): Set<string>[] {
   const excluded = excludedTurns(events);
+  const end = windowEnd(events, turn);
   const questions: Set<string>[] = [];
   for (const event of events) {
-    if (event.turn <= turn || excluded.has(event.turn)) continue;
+    if (event.turn <= turn || event.turn >= end || excluded.has(event.turn)) continue;
     const text = genuineUserText(event);
     if (text === null || !isQuestion(text)) continue;
     questions.push(keyTokens(questionKey(text)));
@@ -300,12 +308,18 @@ export interface MatchCounts {
   listedNeeded: number;
 }
 
-export function matchCounts(needed: Set<string>, listed: Set<string>): MatchCounts {
+// Counted over distinct keys, not anchor ids: a file read forty times before a boundary is one
+// thing to recover, and an index entry for any of those reads recovers it. An id with no anchor
+// keeps its own id as the key, so an unknown id can never match anything.
+export function matchCounts(needed: Set<string>, listed: Set<string>, anchors: Anchor[]): MatchCounts {
+  const keyOf = new Map(anchors.map((a) => [a.id, a.key]));
+  const neededKeys = new Set([...needed].map((id) => keyOf.get(id) ?? id));
+  const listedKeys = new Set([...listed].map((id) => keyOf.get(id) ?? id));
   return {
-    needed: needed.size,
-    hits: [...needed].filter((id) => listed.has(id)).length,
-    listed: listed.size,
-    listedNeeded: [...listed].filter((id) => needed.has(id)).length,
+    needed: neededKeys.size,
+    hits: [...neededKeys].filter((key) => listedKeys.has(key)).length,
+    listed: listedKeys.size,
+    listedNeeded: [...listedKeys].filter((key) => neededKeys.has(key)).length,
   };
 }
 

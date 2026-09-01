@@ -82,7 +82,9 @@ export function runCaseIn(tmp: string, c: EvalCase): CaseResult {
 }
 
 // Replays every compaction up to the case's boundary in one database, in order, so cycle N+1's
-// steering and verdict state comes from cycle N exactly as it does live.
+// steering and verdict state comes from cycle N exactly as it does live. Each cycle's
+// post-compaction file ends at the transcript's next boundary, whether or not that boundary is
+// replayed: a file running past it would hand PostCompact a later cycle to reconcile.
 function replayCycles(
   db: DatabaseSync,
   tmp: string,
@@ -91,10 +93,11 @@ function replayCycles(
 ): CycleRun[] {
   const lines = events.map((e) => e.raw);
   const sessionId = events.find((e) => e.sessionId !== null)?.sessionId ?? 'eval-session';
-  const boundaries = readBoundaries(events).filter((b) => boundaryTurn(events, b) <= c.compactionTurn);
+  const all = readBoundaries(events);
+  const boundaries = all.filter((b) => boundaryTurn(events, b) <= c.compactionTurn);
   return boundaries.map((boundary, i) => {
     const turn = boundaryTurn(events, boundary);
-    const next = boundaries[i + 1];
+    const next = all[i + 1];
     return runCycle({
       db, tmp, sessionId, boundary, turn,
       summary: turn === c.compactionTurn ? c.summary : extractSummary(events, boundary),
@@ -167,9 +170,10 @@ function assemble(
   const derived = union(deriveNeeded(events, target.boundary), deriveNeededAnswers(events, target.boundary));
   const needed = c.needed === null ? derived : new Set(c.needed);
   const listed = listedAnchorIds(target.injected);
-  const counts = matchCounts(needed, listed);
+  const anchors = extractAnchors(events);
+  const counts = matchCounts(needed, listed, anchors);
   const indexTokens = target.injected === '' ? 0 : estimateTokens(target.injected);
-  const searchMs = timeSearches(db, extractAnchors(events), needed);
+  const searchMs = timeSearches(db, anchors, needed);
   const stats = compactStats(events, target.boundary);
   return {
     id: c.id,
