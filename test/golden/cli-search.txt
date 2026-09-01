@@ -1,0 +1,8 @@
+6 anchors for "retry":
+t1a1 answer c0 — The retry loop hangs because the backoff timer never resets between attempts. Each retry reuses the expired deadline, so
+t1r1 read c0 — /repo/src/sync/retry.ts
+t3d1 edit c0 — /repo/src/sync/retry.ts
+t5c1 cmd c0 — sed -n '1,40p' /repo/src/sync/retry.ts
+t5r1 read c0 — /repo/src/sync/retry.ts
+t7u1 user c0 — Keep the exponential backoff, and never retry more than three times.
+Retrieve an original with `seb show <id>`.

@@ -1,0 +1,7 @@
+## Timeline — 1 session, 1 cycle, 9 anchors
+session fix-seven  cycle 0  turns 1–7  9 anchors
+  turn 1  t1a1 answer, t1r1 read
+  turn 3  t3d1 edit, t3c1 cmd
+  turn 4  t4e1 error
+  turn 5  t5c1 cmd, t5r1 read, t5w1 url
+  turn 7  t7u1 user

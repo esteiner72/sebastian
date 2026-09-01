@@ -1,5 +1,5 @@
 import type { Anchor, AnchorType } from '../transcript/anchors.js';
-import { truncateAtWord } from '../transcript/text.js';
+import { estimateTokens, truncateAtWord } from '../transcript/text.js';
 import type { Verdict } from './reconcile.js';
 
 export interface RenderOptions {
@@ -92,18 +92,18 @@ function isUncertain(d: Entry): boolean {
   return PROSE.has(d.anchor.type) && d.score >= UNCERTAIN_MIN && d.score < UNCERTAIN_MAX;
 }
 
-// Prose entries display the verbatim excerpt (an error's raw signature, an answer's opening);
-// identifier entries display the key itself. Every entry carries the exact retrieval command.
-// Whitespace collapses to single spaces first: an answer excerpt is raw assistant prose, and a
-// newline inside it would forge extra index entries — and an early footer — in additionalContext.
+// Every entry carries the exact retrieval command.
 function entryLine(d: Entry): string {
   const a = d.anchor;
-  const display = PROSE.has(a.type) ? a.excerpt : a.key;
-  const flat = display.replaceAll(/\s+/g, ' ').trim();
-  return `- ${a.id} ${a.type}: ${truncateAtWord(flat, 120)} — seb show ${a.id}`;
+  return `- ${a.id} ${a.type}: ${anchorDisplay(a)} — seb show ${a.id}`;
 }
 
-// ~4 characters per token: a budget needs a deterministic estimate, not tokenizer parity.
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+// What an anchor shows on one line, here and in the CLI. Prose entries display the verbatim
+// excerpt (an error's raw signature, an answer's opening); identifier entries display the key
+// itself. Whitespace collapses to single spaces first: an answer excerpt is raw assistant prose,
+// and a newline inside it would forge extra entries — and an early footer — in a line-oriented
+// reader such as additionalContext.
+export function anchorDisplay(a: Anchor): string {
+  const display = PROSE.has(a.type) ? a.excerpt : a.key;
+  return truncateAtWord(display.replaceAll(/\s+/g, ' ').trim(), 120);
 }

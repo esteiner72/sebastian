@@ -1,0 +1,7 @@
+## Forgotten Index — session fix-seven, cycle 0 (dropped)
+4 of 9 reconciled anchors dropped.
+t1a1 answer c0 [dropped 0.12] — The retry loop hangs because the backoff timer never resets between attempts. Each retry reuses the expired deadline, so
+t4e1 error c0 [dropped 0.00] — TypeError: Cannot read properties of undefined (reading 'reset')
+t5w1 url c0 [dropped 0.00] — https://example.com/docs/backoff
+t7u1 user c0 [dropped 0.31] — Keep the exponential backoff, and never retry more than three times.
+Retrieve an original with `seb show <id>`.

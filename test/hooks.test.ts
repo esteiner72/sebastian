@@ -477,7 +477,7 @@ describe('fail-open', () => {
   it('exits 0 from every hook path, including an unknown or missing hook name, and 1 only for an unrecognized command', async () => {
     expect(await main(['hook', 'no-such-hook'])).toBe(0);
     expect(await main(['hook'])).toBe(0);
-    expect(await main(['search', 'anything'])).toBe(1);
+    expect(await main(['frobnicate'])).toBe(1);
     expect(await main([])).toBe(1);
   });
 });

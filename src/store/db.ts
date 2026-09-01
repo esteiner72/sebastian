@@ -114,6 +114,27 @@ export interface AnchorFilters {
   limit?: number;
 }
 
+const FROM_MATCHED = 'FROM anchors_fts JOIN anchors a ON a.rowid = anchors_fts.rowid';
+
+// One page of the match, ordered by FTS rank.
+export function searchAnchors(db: DatabaseSync, query: string, filters: AnchorFilters = {}): Anchor[] {
+  const matched = matchClause(query, filters);
+  if (matched === null) return [];
+  const sql =
+    'SELECT a.id, a.uuid, a.session_id, a.cycle, a.turn, a.type, a.key, a.excerpt ' +
+    `${FROM_MATCHED} ${matched.where} ORDER BY rank LIMIT ?`;
+  return db.prepare(sql).all(...matched.params, clampLimit(filters.limit)).map(rowToAnchor);
+}
+
+// The size of the whole match, not of the page. `searchAnchors` returns at most `clampLimit` rows,
+// and a page that cannot say how much it left behind reads as the whole archive.
+export function countAnchors(db: DatabaseSync, query: string, filters: AnchorFilters = {}): number {
+  const matched = matchClause(query, filters);
+  if (matched === null) return 0;
+  const row = db.prepare(`SELECT COUNT(*) AS n ${FROM_MATCHED} ${matched.where}`).get(...matched.params);
+  return Number(row?.n ?? 0);
+}
+
 // The query is reduced to letter, digit and underscore tokens before it reaches MATCH, which drops
 // FTS5's operator characters (dashes, colons, parentheses). Each surviving token is then quoted,
 // because the reduction cannot drop the operator *words*: a bare AND, OR, NOT or NEAR is grammar to
@@ -121,29 +142,28 @@ export interface AnchorFilters {
 // Quoted tokens combine as an implicit AND. The class is Unicode-aware because FTS5's unicode61
 // tokenizer indexes non-ASCII content: an ASCII-only reduction turns an accented identifier or a
 // CJK path into archived-but-unreachable text. Filters compile to plain WHERE clauses on the joined
-// base table.
-export function searchAnchors(db: DatabaseSync, query: string, filters: AnchorFilters = {}): Anchor[] {
+// base table. A query with no surviving token matches nothing, which the callers read as null.
+function matchClause(
+  query: string,
+  filters: AnchorFilters,
+): { where: string; params: SQLInputValue[] } | null {
   const match = (query.match(/[\p{L}\p{N}_]+/gu) ?? []).map((t) => `"${t}"`).join(' ');
-  if (match === '') return [];
-  let sql =
-    'SELECT a.id, a.uuid, a.session_id, a.cycle, a.turn, a.type, a.key, a.excerpt ' +
-    'FROM anchors_fts JOIN anchors a ON a.rowid = anchors_fts.rowid WHERE anchors_fts MATCH ?';
+  if (match === '') return null;
+  let where = 'WHERE anchors_fts MATCH ?';
   const params: SQLInputValue[] = [match];
-  if (filters.type !== undefined) { sql += ' AND a.type = ?'; params.push(filters.type); }
-  if (filters.cycle !== undefined) { sql += ' AND a.cycle = ?'; params.push(filters.cycle); }
-  if (filters.sessionId !== undefined) { sql += ' AND a.session_id = ?'; params.push(filters.sessionId); }
+  if (filters.type !== undefined) { where += ' AND a.type = ?'; params.push(filters.type); }
+  if (filters.cycle !== undefined) { where += ' AND a.cycle = ?'; params.push(filters.cycle); }
+  if (filters.sessionId !== undefined) { where += ' AND a.session_id = ?'; params.push(filters.sessionId); }
   if (filters.turnRange !== undefined) {
-    sql += ' AND a.turn BETWEEN ? AND ?';
+    where += ' AND a.turn BETWEEN ? AND ?';
     params.push(filters.turnRange.from, filters.turnRange.to);
   }
-  sql += ' ORDER BY rank LIMIT ?';
-  params.push(clampLimit(filters.limit));
-  return db.prepare(sql).all(...params).map(rowToAnchor);
+  return { where, params };
 }
 
 // SQLite reads a negative LIMIT as no limit at all, so a limit that arrives from a command line is
 // clamped rather than passed through.
-const MAX_LIMIT = 200;
+export const MAX_LIMIT = 200;
 
 function clampLimit(limit: number | undefined): number {
   if (limit === undefined) return 50;
@@ -169,6 +189,141 @@ export function getMessage(db: DatabaseSync, uuid: string): TranscriptEvent | nu
   const row = db.prepare('SELECT cycle, turn, record FROM messages WHERE uuid = ?').get(uuid);
   if (row === undefined) return null;
   return toEvent(Number(row.turn), Number(row.cycle), row.record as string);
+}
+
+// `seb show` resolves a session-local id against the whole project, because the display form the
+// model copies back carries at most an 8-character session prefix — and that prefix is a display
+// convenience, never a key, so it is matched as a prefix and an ambiguous match is the caller's to
+// resolve.
+export function lookupAnchors(db: DatabaseSync, id: string, sessionPrefix?: string): Anchor[] {
+  const sql =
+    'SELECT id, uuid, session_id, cycle, turn, type, key, excerpt FROM anchors WHERE id = ?' +
+    (sessionPrefix === undefined ? '' : ' AND session_id LIKE ? ESCAPE \'\\\'') +
+    ' ORDER BY session_id';
+  const params: SQLInputValue[] = sessionPrefix === undefined ? [id] : [id, `${likePrefix(sessionPrefix)}%`];
+  return db.prepare(sql).all(...params).map(rowToAnchor);
+}
+
+// The `cycle:turn` target names a position, and a position exists in every session that reached
+// it, so the sessions holding one are what the caller needs to choose between.
+export function sessionsAtTurn(
+  db: DatabaseSync,
+  cycle: number,
+  turn: number,
+  sessionPrefix?: string,
+): string[] {
+  const sql =
+    'SELECT DISTINCT session_id FROM messages WHERE cycle = ? AND turn = ?' +
+    (sessionPrefix === undefined ? '' : ' AND session_id LIKE ? ESCAPE \'\\\'') +
+    ' ORDER BY session_id';
+  const params: SQLInputValue[] =
+    sessionPrefix === undefined ? [cycle, turn] : [cycle, turn, `${likePrefix(sessionPrefix)}%`];
+  return db.prepare(sql).all(...params).map((row) => row.session_id as string);
+}
+
+// A session id is hexadecimal in practice, but the prefix arrives from a command line, so LIKE's
+// own wildcards are escaped rather than trusted.
+function likePrefix(prefix: string): string {
+  return prefix.replaceAll(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+// `--session` accepts what display prints, which is an 8-character prefix, so a prefix that the
+// reader copied back resolves to the session it names instead of matching nothing.
+export function sessionsMatching(db: DatabaseSync, prefix: string): string[] {
+  return db
+    .prepare("SELECT DISTINCT session_id FROM anchors WHERE session_id LIKE ? ESCAPE '\\' ORDER BY session_id")
+    .all(`${likePrefix(prefix)}%`)
+    .map((row) => row.session_id as string);
+}
+
+export interface ArchivedMessage {
+  sessionId: string;
+  turn: number;
+  cycle: number;
+  ts: string | null;
+  role: string | null;
+  raw: string;
+}
+
+// The `± N turns` window of `seb show`. Turns are file positions, so a contiguous range is a
+// contiguous slice of the transcript, and a turn archived from a different delta is simply absent.
+export function messagesInRange(
+  db: DatabaseSync,
+  sessionId: string,
+  from: number,
+  to: number,
+): ArchivedMessage[] {
+  return db
+    .prepare(
+      'SELECT session_id, turn, cycle, ts, role, record FROM messages ' +
+        'WHERE session_id = ? AND turn BETWEEN ? AND ? ORDER BY turn',
+    )
+    .all(sessionId, from, to)
+    .map((row) => ({
+      sessionId: row.session_id as string,
+      turn: Number(row.turn),
+      cycle: Number(row.cycle),
+      ts: (row.ts as string | null) ?? null,
+      role: (row.role as string | null) ?? null,
+      raw: row.record as string,
+    }));
+}
+
+// The turn map behind `seb timeline`: every anchor, newest cycle first, in file order within a
+// cycle. Insertion order breaks the tie inside a turn, which is extraction order, so a turn's
+// anchors read in the order the transcript produced them.
+export function listAnchors(db: DatabaseSync, cycle?: number): Anchor[] {
+  const sql =
+    'SELECT id, uuid, session_id, cycle, turn, type, key, excerpt FROM anchors' +
+    (cycle === undefined ? '' : ' WHERE cycle = ?') +
+    ' ORDER BY cycle DESC, session_id, turn, rowid';
+  const params: SQLInputValue[] = cycle === undefined ? [] : [cycle];
+  return db.prepare(sql).all(...params).map(rowToAnchor);
+}
+
+export interface StoreStats {
+  sessions: number;
+  messages: number;
+  anchors: number;
+  reconciled: number;
+  cycles: number;
+  reconciledCycles: number;
+  searches: number;
+  shows: number;
+}
+
+// One scalar per statistic, in one round trip: `seb status` reports the archive, not a sample of
+// it, so every count here is over the whole project database.
+export function storeStats(db: DatabaseSync): StoreStats {
+  const row = db
+    .prepare(
+      'SELECT (SELECT COUNT(DISTINCT session_id) FROM messages) AS sessions, ' +
+        '(SELECT COUNT(*) FROM messages) AS messages, ' +
+        '(SELECT COUNT(*) FROM anchors) AS anchors, ' +
+        '(SELECT COUNT(*) FROM anchors WHERE verdict IS NOT NULL) AS reconciled, ' +
+        '(SELECT COUNT(*) FROM cycles) AS cycles, ' +
+        '(SELECT COUNT(*) FROM cycles WHERE reconciled_at IS NOT NULL) AS reconciled_cycles, ' +
+        "(SELECT COUNT(*) FROM telemetry WHERE cmd = 'search') AS searches, " +
+        "(SELECT COUNT(*) FROM telemetry WHERE cmd = 'show') AS shows",
+    )
+    .get();
+  return {
+    sessions: Number(row?.sessions),
+    messages: Number(row?.messages),
+    anchors: Number(row?.anchors),
+    reconciled: Number(row?.reconciled),
+    cycles: Number(row?.cycles),
+    reconciledCycles: Number(row?.reconciled_cycles),
+    searches: Number(row?.searches),
+    shows: Number(row?.shows),
+  };
+}
+
+// SQLite knows where it opened from, so `seb status` reports the file in use rather than
+// recomputing a path that a test — or a future flag — may have overridden.
+export function databaseFile(db: DatabaseSync): string {
+  const row = db.prepare("SELECT file FROM pragma_database_list WHERE name = 'main'").get();
+  return (row?.file as string | undefined) ?? '';
 }
 
 export interface CycleRecord {
@@ -227,16 +382,34 @@ export interface ReconciledCycle {
 // rows. Injection is per-session by contract; project scope belongs to `seb search`.
 export function latestReconciledCycle(db: DatabaseSync, sessionId?: string | null): ReconciledCycle | null {
   const row = pickCycle(db, sessionId);
-  if (row === null) return null;
+  return row === null ? null : loadCycle(db, row.sessionId, row.cycle);
+}
+
+// What `seb index` reports: the project's most recently reconciled cycle, whichever session it
+// belongs to. The CLI runs from a shell and is never told the caller's session id, and the id it
+// could guess would be the wrong one as often as not — so the CLI reads the project, the way
+// `seb search` does, while injection stays per-session.
+export function newestReconciledCycle(db: DatabaseSync): ReconciledCycle | null {
+  const row = db
+    .prepare(
+      'SELECT session_id, cycle FROM cycles WHERE reconciled_at IS NOT NULL ' +
+        'ORDER BY reconciled_at DESC, cycle DESC LIMIT 1',
+    )
+    .get();
+  if (row === undefined) return null;
+  return loadCycle(db, row.session_id as string, Number(row.cycle));
+}
+
+function loadCycle(db: DatabaseSync, sessionId: string, cycle: number): ReconciledCycle {
   const rows = db
     .prepare(
       'SELECT id, uuid, session_id, cycle, turn, type, key, excerpt, verdict, score FROM anchors ' +
-        'WHERE session_id = ? AND cycle = ? AND verdict IS NOT NULL ORDER BY turn',
+        'WHERE session_id = ? AND cycle = ? AND verdict IS NOT NULL ORDER BY turn, rowid',
     )
-    .all(row.sessionId, row.cycle);
+    .all(sessionId, cycle);
   return {
-    sessionId: row.sessionId,
-    cycle: row.cycle,
+    sessionId,
+    cycle,
     anchors: rows.map(rowToAnchor),
     verdicts: rows.map(rowToVerdict),
   };

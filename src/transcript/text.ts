@@ -148,3 +148,12 @@ export function truncateAtWord(text: string, max: number): string {
   const lastSpace = cut.lastIndexOf(' ');
   return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut.slice(0, max)).trimEnd();
 }
+
+// ~4 characters per token. Every budget in Sebastian — the injected index and the CLI output cap —
+// needs a deterministic estimate rather than tokenizer parity, and one estimate keeps a rendered
+// string that fits an injection budget also fitting the same number of CLI tokens.
+export const TOKEN_CHARS = 4;
+
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / TOKEN_CHARS);
+}
