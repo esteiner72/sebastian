@@ -35,16 +35,24 @@ CREATE TABLE IF NOT EXISTS anchors (
   PRIMARY KEY (session_id, id)
 );
 
+-- `injected_tokens` is what SessionStart spent on this cycle's Forgotten Index. Zero means the
+-- cycle dropped nothing and the hook rendered nothing; NULL means SessionStart never ran for it, so
+-- the two cases stay distinguishable.
 CREATE TABLE IF NOT EXISTS cycles (
-  session_id    TEXT NOT NULL,
-  cycle         INTEGER NOT NULL,
-  trigger       TEXT,
-  archived_at   TEXT,
-  reconciled_at TEXT,
-  summary       TEXT,
+  session_id      TEXT NOT NULL,
+  cycle           INTEGER NOT NULL,
+  trigger         TEXT,
+  archived_at     TEXT,
+  reconciled_at   TEXT,
+  summary         TEXT,
+  injected_tokens INTEGER,
   PRIMARY KEY (session_id, cycle)
 );
 
+-- `cycle` is an attribution, not a fact. A CLI invocation receives no session or cycle from its
+-- caller, so the column holds the newest cycle recorded in the project when the command ran. A
+-- retrieval follows the injection that prompted it within the same session, so this is right in the
+-- ordinary case and wrong when two sessions in one project interleave across a compaction.
 CREATE TABLE IF NOT EXISTS telemetry (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   ts          TEXT NOT NULL,
@@ -52,7 +60,8 @@ CREATE TABLE IF NOT EXISTS telemetry (
   anchor_type TEXT,
   session_id  TEXT,                     -- with anchor_id, references anchors(session_id, id)
   anchor_id   TEXT,
-  hits        INTEGER
+  hits        INTEGER,
+  cycle       INTEGER                   -- attributed, not observed; see above
 );
 
 CREATE TABLE IF NOT EXISTS log (        -- fail-open diagnostics; hooks never print to stdout

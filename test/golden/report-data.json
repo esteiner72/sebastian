@@ -1,0 +1,54 @@
+{
+  "totals": {
+    "sessions": 2,
+    "messages": 5,
+    "anchors": 5,
+    "reconciled": 4,
+    "cycles": 3,
+    "reconciledCycles": 2
+  },
+  "hooks": [
+    { "hook": "pre-compact", "runs": 3, "warns": 1, "lastRun": "2026-09-01T12:00:00.000Z" },
+    { "hook": "post-compact", "runs": 1, "warns": 0, "lastRun": "2026-09-01T11:05:00.000Z" },
+    { "hook": "session-start", "runs": 1, "warns": 0, "lastRun": "2026-09-01T11:06:00.000Z" }
+  ],
+  "cycles": [
+    {
+      "cycle": 0,
+      "session": "fd0bded9",
+      "trigger": "auto",
+      "anchors": 4,
+      "reconciled": 4,
+      "dropped": 3,
+      "injectedTokens": 118
+    },
+    {
+      "cycle": 1,
+      "session": "fd0bded9",
+      "trigger": "manual",
+      "anchors": 0,
+      "reconciled": 0,
+      "dropped": 0,
+      "injectedTokens": 0
+    },
+    {
+      "cycle": 0,
+      "session": "b18a6c57",
+      "trigger": "auto",
+      "anchors": 1,
+      "reconciled": 0,
+      "dropped": 0,
+      "injectedTokens": null
+    }
+  ],
+  "byType": [
+    { "type": "answer", "observed": 1, "dropped": 1, "meanScore": 0, "absent": 1, "uncertain": 0 },
+    { "type": "edit", "observed": 1, "dropped": 0, "meanScore": 1, "absent": 0, "uncertain": 0 },
+    { "type": "error", "observed": 2, "dropped": 2, "meanScore": 0.2, "absent": 1, "uncertain": 1 }
+  ],
+  "retrievals": [
+    { "cmd": "search", "type": "error", "cycle": 1, "count": 2, "withHits": 1 },
+    { "cmd": "show", "type": "answer", "cycle": 1, "count": 1, "withHits": 1 },
+    { "cmd": "status", "type": null, "cycle": 1, "count": 1, "withHits": 0 }
+  ]
+}

@@ -5,7 +5,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractAnchors } from '../src/transcript/anchors.js';
 import { parseTranscript } from '../src/transcript/parse.js';
-import { archiveDelta, getMessage, openDbAt, searchAnchors } from '../src/store/db.js';
+import {
+  archiveDelta, getMessage, logTelemetry, openDbAt, recordCycle, recordInjection, searchAnchors,
+} from '../src/store/db.js';
+import { DatabaseSync } from 'node:sqlite';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/seven-types.jsonl', import.meta.url));
 const BOUNDARY = fileURLToPath(new URL('./fixtures/boundary.jsonl', import.meta.url));
@@ -162,5 +165,43 @@ describe('store round-trip', () => {
     expect(searchAnchors(db, 'café').map((a) => a.uuid)).toEqual(['u0']);
     expect(searchAnchors(db, '中文').map((a) => a.uuid)).toEqual(['u0']);
     db.close();
+  });
+});
+
+// A field tester who pulls a new build mid-test must keep the archive they have already produced.
+// Their database was created without the columns the loop now writes, and `CREATE TABLE IF NOT
+// EXISTS` cannot reach an existing table — so an unmigrated archive would take every later write
+// down the hooks' fail-open path and record nothing, with no symptom until the export came back
+// empty. The eval harness builds a fresh database for every case and can never see this.
+describe('opening an archive built before the loop recorded cycles and injected tokens', () => {
+  it('adds the missing columns and writes both without losing the rows already there', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'seb-migrate-')), 'sebastian.db');
+    const before = new DatabaseSync(path);
+    before.exec(`
+      CREATE TABLE telemetry (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+        cmd TEXT NOT NULL, anchor_type TEXT, session_id TEXT, anchor_id TEXT, hits INTEGER);
+      CREATE TABLE cycles (session_id TEXT NOT NULL, cycle INTEGER NOT NULL, trigger TEXT,
+        archived_at TEXT, reconciled_at TEXT, summary TEXT, PRIMARY KEY (session_id, cycle));
+    `);
+    before.prepare('INSERT INTO telemetry (ts, cmd, hits) VALUES (?, ?, ?)')
+      .run('2026-09-01T09:00:00.000Z', 'search', 4);
+    before.close();
+
+    const db = openDbAt(path);
+    recordCycle(db, { sessionId: 'kept', cycle: 0, trigger: 'auto', summary: 'x' });
+    logTelemetry(db, { cmd: 'show', anchorType: 'error', hits: 1 });
+    recordInjection(db, 'kept', 0, 118);
+
+    expect(db.prepare('SELECT cmd, hits, cycle FROM telemetry ORDER BY id').all()).toEqual([
+      { cmd: 'search', hits: 4, cycle: null },
+      { cmd: 'show', hits: 1, cycle: 0 },
+    ]);
+    expect(db.prepare('SELECT injected_tokens FROM cycles').all()).toEqual([{ injected_tokens: 118 }]);
+    db.close();
+
+    // Opening again must be a no-op rather than a second ALTER.
+    const reopened = openDbAt(path);
+    expect(reopened.prepare('SELECT COUNT(*) AS n FROM telemetry').get()).toEqual({ n: 2 });
+    reopened.close();
   });
 });

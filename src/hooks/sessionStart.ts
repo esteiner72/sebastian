@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { latestCycle, logEvent, type CycleIndex } from '../store/db.js';
+import { latestCycle, logEvent, recordInjection, type CycleIndex } from '../store/db.js';
 import { renderForgottenIndex, renderUnreconciledIndex } from '../reconcile/render.js';
-import { str } from '../transcript/text.js';
+import { estimateTokens, str } from '../transcript/text.js';
 import type { Payload } from './runHook.js';
 
 // One ceiling for every injection. The renderer fills it one type at a time, so a cycle that lost
@@ -23,11 +23,16 @@ export function sessionStart(db: DatabaseSync, payload: Payload): string {
     return '';
   }
   const text = render(cycle);
+  // What this cycle's index cost the context window, recorded before the text leaves the hook. An
+  // empty render spends nothing and records 0, which is a measurement rather than a missing one.
+  const tokens = text === '' ? 0 : estimateTokens(text);
+  recordInjection(db, cycle.sessionId, cycle.cycle, tokens);
   logEvent(
     db,
     'session-start',
     'info',
-    `cycle ${cycle.cycle}: ${cycle.reconciled ? 'reconciled' : 'unreconciled'} index, ${text.length} chars`,
+    `cycle ${cycle.cycle}: ${cycle.reconciled ? 'reconciled' : 'unreconciled'} index, ` +
+      `${text.length} chars, ${tokens} tokens injected`,
   );
   return text === '' ? '' : additionalContext(text);
 }

@@ -1,5 +1,5 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { toEvent, type TranscriptEvent } from '../transcript/parse.js';
@@ -32,8 +32,26 @@ export function openDbAt(path: string): DatabaseSync {
   chmodSync(dir, 0o700);
   const db = new DatabaseSync(path);
   db.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
+  migrateColumns(db);
   chmodSync(path, 0o600);
   return db;
+}
+
+// Columns added to a table that already exists. `CREATE TABLE IF NOT EXISTS` is a no-op on an
+// archive from an earlier build, so a new column reaches it only here — and an archive mid-field-test
+// is data nobody can regenerate. SQLite has no ADD COLUMN IF NOT EXISTS, hence the pragma test.
+const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
+  ['telemetry', 'cycle', 'INTEGER'],
+  ['cycles', 'injected_tokens', 'INTEGER'],
+];
+
+export function migrateColumns(db: DatabaseSync): void {
+  const present = db.prepare('SELECT 1 FROM pragma_table_info(?) WHERE name = ?');
+  for (const [table, column, type] of ADDED_COLUMNS) {
+    if (present.get(table, column) === undefined) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  }
 }
 
 interface ArchiveStatements {
@@ -441,10 +459,87 @@ export interface TelemetryEntry {
   hits: number;
 }
 
+// The cycle is resolved here rather than passed in: a command runs from a shell and is never told
+// which cycle prompted it, so no caller could supply a better answer than the database already has.
 export function logTelemetry(db: DatabaseSync, t: TelemetryEntry): void {
   db.prepare(
-    'INSERT INTO telemetry (ts, cmd, anchor_type, session_id, anchor_id, hits) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(new Date().toISOString(), t.cmd, t.anchorType ?? null, t.sessionId ?? null, t.anchorId ?? null, t.hits);
+    'INSERT INTO telemetry (ts, cmd, anchor_type, session_id, anchor_id, hits, cycle) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).run(
+    new Date().toISOString(),
+    t.cmd,
+    t.anchorType ?? null,
+    t.sessionId ?? null,
+    t.anchorId ?? null,
+    t.hits,
+    currentCycle(db),
+  );
+}
+
+// The newest cycle recorded anywhere in the project, which is the one a retrieval most likely
+// follows. Null before the first compaction, when a command can only be reaching the archive
+// directly.
+export function currentCycle(db: DatabaseSync): number | null {
+  const row = db.prepare('SELECT MAX(cycle) AS cycle FROM cycles').get();
+  return row?.cycle === null || row?.cycle === undefined ? null : Number(row.cycle);
+}
+
+// What SessionStart spent on this cycle's index. Written for every cycle the hook renders,
+// including the zero case: a cycle that dropped nothing spent nothing, and NULL is reserved for a
+// cycle SessionStart never reached.
+export function recordInjection(db: DatabaseSync, sessionId: string, cycle: number, tokens: number): void {
+  db.prepare('UPDATE cycles SET injected_tokens = ? WHERE session_id = ? AND cycle = ?').run(
+    tokens,
+    sessionId,
+    cycle,
+  );
+}
+
+export interface HookStat {
+  hook: string;
+  runs: number;
+  warns: number;
+  lastRun: string | null;
+}
+
+// Every hook logs a row on every path, so this table is also the install check: no row for a hook
+// means that hook has never executed. Reads no `msg` — the text is a diagnostic that can quote a
+// path or an error body, and nothing here needs it. Hooks are listed in the order they fire, not the
+// order they logged, so a missing one reads as a gap.
+const HOOK_ORDER = ['pre-compact', 'post-compact', 'session-start'];
+
+export function hookStats(db: DatabaseSync): HookStat[] {
+  const rows = db
+    .prepare(
+      "SELECT hook, COUNT(*) AS runs, SUM(level = 'warn') AS warns, MAX(ts) AS last_run " +
+        'FROM log WHERE hook IS NOT NULL GROUP BY hook',
+    )
+    .all();
+  const byHook = new Map(rows.map((r) => [String(r.hook), r]));
+  return HOOK_ORDER.filter((hook) => byHook.has(hook)).map((hook) => {
+    const row = byHook.get(hook);
+    return {
+      hook,
+      runs: Number(row?.runs ?? 0),
+      warns: Number(row?.warns ?? 0),
+      lastRun: (row?.last_run as string | null) ?? null,
+    };
+  });
+}
+
+// The database plus its write-ahead log: the log holds committed rows that have not been
+// checkpointed, so the main file alone understates a busy project.
+export function archiveBytes(db: DatabaseSync): number {
+  const file = databaseFile(db);
+  return fileBytes(file) + fileBytes(`${file}-wal`);
+}
+
+function fileBytes(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
 }
 
 export function logEvent(db: DatabaseSync, hook: string, level: string, msg: string): void {

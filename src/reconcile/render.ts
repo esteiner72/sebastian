@@ -11,8 +11,8 @@ const PROSE = new Set<AnchorType>(['error', 'answer', 'user']);
 
 // Bands are presentation-only: identifiers and negligible-overlap prose list plainly, while a
 // near-miss on token overlap is the paraphrase signature and lists under a verify-first heading.
-const UNCERTAIN_MIN = 0.25;
-const UNCERTAIN_MAX = 0.5;
+export const UNCERTAIN_MIN = 0.25;
+export const UNCERTAIN_MAX = 0.5;
 
 const UNCERTAIN_HEADING = 'Possibly paraphrased — verify against the summary before retrieving:';
 

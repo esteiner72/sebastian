@@ -13,6 +13,7 @@ import { show } from './cli/show.js';
 import { indexCommand } from './cli/index.js';
 import { timeline } from './cli/timeline.js';
 import { status } from './cli/status.js';
+import { report } from './cli/report.js';
 
 // The names hooks/run-hook.sh forwards, and the bodies they reach.
 const BODIES: Record<string, HookBody> = {
@@ -32,6 +33,7 @@ const COMMANDS: Record<string, Command> = {
   index: indexCommand,
   timeline,
   status,
+  report,
 };
 
 const USAGE = [
@@ -41,6 +43,7 @@ const USAGE = [
   '  seb index [--dropped|--all|--raw]',
   '  seb timeline [--cycle N]',
   '  seb status',
+  '  seb report',
   '  seb hook <pre-compact|post-compact|session-start>',
   '',
 ].join('\n');

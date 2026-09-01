@@ -71,9 +71,10 @@ answer against the summary, and retrieve only what the summary is missing.
 | `seb index` | Print the current Forgotten Index. `--dropped` and `--all` list every anchor, `--raw` adds match scores |
 | `seb timeline` | Map the turns of a cycle. `--cycle N` narrows it |
 | `seb status` | Report cycles, archive size, and the steering in force |
+| `seb report` | Print a JSON summary of the loop's own behaviour. For the maintainer, not for retrieval: it holds counts and timestamps, never archived content |
 
 Search covers the whole project, not only this session, so it finds work from a session whose id you
-do not know. Every command caps its output and tells you how to narrow the result.
+do not know. Every retrieval command caps its output and tells you how to narrow the result.
 
 ## Worked example
 

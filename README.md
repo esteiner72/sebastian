@@ -26,25 +26,26 @@ Pre-release. You can install it from source today. Release candidates are publis
 
 ## Install
 
-Clone the repository and build it. The plugin runs the compiled output in `dist/`, so the build is
-not optional:
+Clone the repository and run the setup script. It installs dependencies, builds, registers the
+clone as a marketplace, and installs the plugin:
 
 ```bash
 git clone https://github.com/esteiner72/sebastian.git
 cd sebastian
-npm install
-npm run build
+npm run setup
 ```
 
-Register the repository as a marketplace and install the plugin from it:
+Restart Claude Code. Sebastian works from the next compaction onward.
 
-```bash
-claude plugin marketplace add ./
-claude plugin install sebastian@sebastian
-```
+Run `npm run setup` again after every pull, and restart. A plain `npm run build` is not enough:
+installing a plugin copies the working tree into Claude Code's plugin cache, and the hooks run that
+copy rather than your clone. The setup script refreshes the copy and stops if it does not match what
+you just built.
 
-Restart Claude Code. Sebastian works from the next compaction onward. After you pull a new version,
-run `npm run build` again and restart.
+The build is not optional, and skipping it fails silently. `dist/` is not in the repository, and a
+hook that cannot find the compiled output exits 0 so that it never blocks a compaction — so a plugin
+installed without a build loads, runs, and does nothing. `seb status` reports which hooks have run,
+so you can tell a working install from a quiet one.
 
 ## How it works
 
@@ -98,7 +99,10 @@ retrieve only what is genuinely missing.
 
 ## Retrieval
 
-You and the model both reach the archive through the bundled `seb` command.
+You and the model both reach the archive through the bundled `seb` command. The model runs it from
+the plugin directory, so the name does not have to be on your PATH for the loop to work. To use it
+yourself, the setup script links it globally where it can; if that did not happen, run
+`node dist/index.js <command>` from the clone instead.
 
 | Command | Purpose |
 | --- | --- |
@@ -107,9 +111,11 @@ You and the model both reach the archive through the bundled `seb` command.
 | `seb index` | Show the current Forgotten Index |
 | `seb timeline` | Show the turn map for a cycle |
 | `seb status` | Show cycles, archive size, and steering state |
+| `seb report` | Print a JSON summary of how the loop behaved, holding no archived content |
 
-Search covers the whole project rather than one session, and every command caps its output and tells
-you how to narrow the result.
+Search covers the whole project rather than one session. Every command caps its output and tells you
+how to narrow the result, except `seb report`, which prints one JSON document because a truncated
+one does not parse.
 
 ## Performance
 

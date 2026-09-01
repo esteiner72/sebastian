@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  archiveDelta, openDb, openDbAt, persistVerdicts, projectSlug, recordCycle,
+  archiveDelta, logEvent, openDb, openDbAt, persistVerdicts, projectSlug, recordCycle,
   type ArchivedMessage,
 } from '../src/store/db.js';
 import { extractAnchors } from '../src/transcript/anchors.js';
@@ -16,6 +16,7 @@ import { fitWindow, show } from '../src/cli/show.js';
 import { indexCommand } from '../src/cli/index.js';
 import { timeline } from '../src/cli/timeline.js';
 import { status } from '../src/cli/status.js';
+import { report } from '../src/cli/report.js';
 import { main } from '../src/index.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/seven-types.jsonl', import.meta.url));
@@ -240,6 +241,50 @@ describe('cli retrieval', () => {
     expect(db.prepare("SELECT hits FROM telemetry WHERE cmd = 'status'").all()).toEqual([{ hits: 0 }]);
     db.close();
   });
+
+  // The export travels to the maintainer, so the failure that matters is a leak: the seeded archive
+  // carries CANARY-SEB-LEAK in every free-text column the schema has, and an exact comparison
+  // against a hand-derived file fails if any of it reaches the output. The eval harness never
+  // invokes the CLI, so nothing there can catch it.
+  it('exports only counts, hashes and timestamps, never a byte of archived text', () => {
+    const db = tempDb('seb-cli-report-');
+    seedForReport(db);
+    const parsed = JSON.parse(report(db, [])) as {
+      schema: number;
+      env: Record<string, string>;
+      data: { totals: Record<string, number> };
+    };
+
+    // The archive's size on disk is not reproducible, so it is asserted rather than pinned.
+    expect(parsed.data.totals.dbBytes).toBeGreaterThan(0);
+    delete parsed.data.totals.dbBytes;
+
+    expect(parsed.schema).toBe(1);
+    expect(parsed.data).toEqual(JSON.parse(golden('report-data.json')));
+    expect(parsed.env.project).toMatch(/^[0-9a-f]{12}$/);
+    expect(report(db, [])).not.toContain(CANARY);
+    db.close();
+  });
+
+  // A silently dead install is the failure the eval harness cannot see: it drives the hook bodies
+  // directly, so it can never observe hooks that were never wired to fire. These two readings are
+  // what a field tester checks after installing.
+  it('distinguishes an install where no hook has ever fired from one where all three have', () => {
+    const empty = tempDb('seb-cli-hooks-none-');
+    expect(status(empty, [])).toContain('Hooks: none has run yet.');
+    empty.close();
+
+    const db = tempDb('seb-cli-hooks-all-');
+    logEvent(db, 'pre-compact', 'info', 'archived 12 messages');
+    logEvent(db, 'pre-compact', 'warn', 'no transcript to archive; steering only');
+    logEvent(db, 'post-compact', 'info', 'cycle 0: 9 verdicts persisted');
+    logEvent(db, 'session-start', 'info', 'cycle 0: reconciled index');
+    const text = status(db, []);
+
+    expect(text).toContain('Hooks: pre-compact 2 runs, post-compact 1 run, session-start 1 run;');
+    expect(text).toContain('(1 warning — `seb report` has the detail)');
+    db.close();
+  });
 });
 
 // The CLI runs from a shell, so its exit code is the signal the model reads. Unlike a hook it may
@@ -282,3 +327,72 @@ describe('cli process edge', () => {
     expect(await main(['index', '--nope'])).toBe(1);
   });
 });
+
+const CANARY = 'CANARY-SEB-LEAK';
+
+// One archive with every shape the report reads: two sessions, a cycle whose SessionStart ran and
+// spent tokens, one whose render was empty, one SessionStart never reached, both verdict bands, an
+// unreconciled anchor, three hooks with one warning, and retrievals with and without hits. Written
+// as direct SQL at fixed timestamps so the document is byte-stable, and every free-text column
+// carries the canary.
+function seedForReport(db: DatabaseSync): void {
+  const messages = [
+    ['u1', 's-alpha', 0, 1], ['u2', 's-alpha', 0, 2], ['u3', 's-alpha', 0, 3],
+    ['u4', 's-alpha', 0, 4], ['u5', 's-beta', 0, 1],
+  ] as const;
+  const message = db.prepare(
+    'INSERT INTO messages (uuid, session_id, cycle, turn, ts, role, record) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  for (const [uuid, session, cycle, turn] of messages) {
+    message.run(uuid, session, cycle, turn, '2026-09-01T10:00:00.000Z', 'user', `{"t":"${CANARY}"}`);
+  }
+
+  const anchors = [
+    ['s-alpha', 't1e1', 'u1', 0, 1, 'error', 'dropped', 0.1],
+    ['s-alpha', 't2e1', 'u2', 0, 2, 'error', 'dropped', 0.3],
+    ['s-alpha', 't3d1', 'u3', 0, 3, 'edit', 'kept', 1],
+    ['s-alpha', 't4a1', 'u4', 0, 4, 'answer', 'dropped', 0],
+    ['s-beta', 't1e1', 'u5', 0, 1, 'error', null, null],
+  ] as const;
+  const anchor = db.prepare(
+    'INSERT INTO anchors (session_id, id, uuid, cycle, turn, type, key, excerpt, verdict, score) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  for (const [session, id, uuid, cycle, turn, type, verdict, score] of anchors) {
+    anchor.run(session, id, uuid, cycle, turn, type, CANARY, CANARY, verdict, score);
+  }
+
+  const cycleRows = [
+    ['s-alpha', 0, 'auto', '2026-09-01T11:00:00.000Z', 118],
+    ['s-alpha', 1, 'manual', '2026-09-01T11:30:00.000Z', 0],
+    ['s-beta', 0, 'auto', null, null],
+  ] as const;
+  const cycle = db.prepare(
+    'INSERT INTO cycles (session_id, cycle, trigger, reconciled_at, summary, injected_tokens) ' +
+      'VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  for (const [session, n, trigger, reconciledAt, tokens] of cycleRows) {
+    cycle.run(session, n, trigger, reconciledAt, CANARY, tokens);
+  }
+
+  const telemetry = [
+    ['search', 'error', 3], ['search', 'error', 0], ['show', 'answer', 1], ['status', null, 0],
+  ] as const;
+  const row = db.prepare(
+    'INSERT INTO telemetry (ts, cmd, anchor_type, session_id, anchor_id, hits, cycle) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  for (const [cmd, type, hits] of telemetry) {
+    row.run('2026-09-01T11:40:00.000Z', cmd, type, null, null, hits, 1);
+  }
+
+  const events = [
+    ['pre-compact', 'info', '2026-09-01T10:00:00.000Z'],
+    ['pre-compact', 'info', '2026-09-01T11:00:00.000Z'],
+    ['pre-compact', 'warn', '2026-09-01T12:00:00.000Z'],
+    ['post-compact', 'info', '2026-09-01T11:05:00.000Z'],
+    ['session-start', 'info', '2026-09-01T11:06:00.000Z'],
+  ] as const;
+  const event = db.prepare('INSERT INTO log (ts, hook, level, msg) VALUES (?, ?, ?, ?)');
+  for (const [hook, level, ts] of events) event.run(ts, hook, level, CANARY);
+}

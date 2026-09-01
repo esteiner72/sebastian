@@ -1,7 +1,9 @@
 import { parseArgs } from 'node:util';
-import { statSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
-import { databaseFile, logTelemetry, newestReconciledCycle, storeStats } from '../store/db.js';
+import {
+  archiveBytes, databaseFile, hookStats, logTelemetry, newestReconciledCycle, storeStats,
+  type HookStat,
+} from '../store/db.js';
 import { computeSteering } from '../steer/adapt.js';
 import { capOutput, OUTPUT_TOKENS, plural } from './output.js';
 import { usageWrap } from './args.js';
@@ -18,10 +20,11 @@ export function status(db: DatabaseSync, argv: string[]): string {
   logTelemetry(db, { cmd: 'status', hits: 0 });
   const file = databaseFile(db);
   const lines = [
-    `## Sebastian — ${file} (${formatSize(archiveSize(file))})`,
+    `## Sebastian — ${file} (${formatSize(archiveBytes(db))})`,
     `${plural(stats.sessions, 'session')}, ${plural(stats.messages, 'message')}, ` +
       `${plural(stats.anchors, 'anchor')} (${stats.reconciled} reconciled)`,
     `${plural(stats.cycles, 'cycle')} recorded, ${stats.reconciledCycles} reconciled`,
+    hooksLine(hookStats(db)),
     `Telemetry: ${stats.searches} searches, ${stats.shows} shows`,
     latestLine(cycle),
     '',
@@ -38,18 +41,23 @@ function latestLine(cycle: ReturnType<typeof newestReconciledCycle>): string {
   );
 }
 
-// The write-ahead log holds committed rows that have not been checkpointed, so an archive's size
-// is the database plus its log — reporting the main file alone understates a busy project.
-function archiveSize(file: string): number {
-  return fileSize(file) + fileSize(`${file}-wal`);
+// Whether the plugin is wired up at all. A fresh install that never fired looks exactly like a
+// working install in every other line of this report, so the absence of a hook is stated rather
+// than left to be inferred from zero counts elsewhere. Warnings are called out because a hook that
+// fails open on every cycle otherwise reads as a hook that works.
+function hooksLine(hooks: HookStat[]): string {
+  if (hooks.length === 0) return 'Hooks: none has run yet.';
+  const parts = hooks.map((h) => `${h.hook} ${plural(h.runs, 'run')}`);
+  const warns = hooks.reduce((n, h) => n + h.warns, 0);
+  const last = hooks.reduce<string | null>((newest, h) => later(newest, h.lastRun), null);
+  const suffix = warns === 0 ? '' : ` (${plural(warns, 'warning')} — \`seb report\` has the detail)`;
+  return `Hooks: ${parts.join(', ')}; last ran ${last ?? 'never'}${suffix}`;
 }
 
-function fileSize(path: string): number {
-  try {
-    return statSync(path).size;
-  } catch {
-    return 0;
-  }
+function later(a: string | null, b: string | null): string | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return b > a ? b : a;
 }
 
 function formatSize(bytes: number): string {
