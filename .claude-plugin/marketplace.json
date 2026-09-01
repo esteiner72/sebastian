@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "sebastian",
+  "description": "Sebastian, a Claude Code plugin that makes compaction recoverable.",
+  "owner": {
+    "name": "Ethan Steiner",
+    "email": "ethansteiner14@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "sebastian",
+      "description": "Makes compaction recoverable: steers the summarizer, archives the transcript delta, and injects an index of what the summary dropped.",
+      "author": { "name": "Ethan Steiner" },
+      "category": "productivity",
+      "homepage": "https://github.com/esteiner72/sebastian",
+      "source": "./"
+    }
+  ]
+}

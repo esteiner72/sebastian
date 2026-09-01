@@ -1,0 +1,8 @@
+## Forgotten Index — unreconciled
+No summary reached Sebastian for this compaction, so these anchors were never checked against one. Each existed before the boundary; whether the summary kept it is unknown.
+- t4e1 error: TypeError: cannot read properties of undefined (reading 'config') — seb show t4e1
+- t7e1 error: ENOENT: no such file or directory, open 'sebastian.db' — seb show t7e1
+- t9a1 answer: WAL plus a 5-second busy timeout stops the second session failing instantly. — seb show t9a1
+- t12d1 edit: src/store/db.ts — seb show t12d1
+- t15r1 read: src/transcript/parse.ts — seb show t15r1
+Check each against the summary you hold; `seb show <id>` retrieves an original, and `seb timeline` maps the cycle.

@@ -31,10 +31,11 @@ interface CycleRun {
   retention: number | null;
 }
 
-interface CaseResult {
+export interface CaseResult {
   id: string;
   kind: EvalCase['kind'];
   score: CaseScore;
+  injected: string;
   counts: MatchCounts;
   samples: { preMs: number[]; startMs: number[]; searchMs: number[]; indexTokens: number[] };
   violationPass: boolean | null;
@@ -55,13 +56,16 @@ export function runEval(corpusDir: string): { perCase: CaseResult[]; aggregate: 
 export function runCase(c: EvalCase): CaseResult {
   const tmp = mkdtempSync(join(tmpdir(), 'seb-eval-'));
   try {
-    return scoreInDir(tmp, c);
+    return runCaseIn(tmp, c);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-function scoreInDir(tmp: string, c: EvalCase): CaseResult {
+// One case in a caller-supplied directory, leaving `eval.db` behind. The end-to-end replay test
+// reopens that database to carry the cycle on into retrieval, so there is one replay mechanism
+// rather than two.
+export function runCaseIn(tmp: string, c: EvalCase): CaseResult {
   const dbFile = join(tmp, 'eval.db');
   const db = openDbAt(dbFile);
   const events = parseTranscript(c.transcriptPath);
@@ -170,6 +174,7 @@ function assemble(
   return {
     id: c.id,
     kind: c.kind,
+    injected: target.injected,
     score: {
       quality: scoreQuality(counts, indexTokens, steeringLift(cycles, target)),
       latency: {

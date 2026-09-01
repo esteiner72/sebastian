@@ -365,31 +365,36 @@ export function persistVerdicts(db: DatabaseSync, verdicts: Verdict[]): number {
   }
 }
 
-export interface ReconciledCycle {
+export interface CycleIndex {
   sessionId: string;
   cycle: number;
+  reconciled: boolean;
   anchors: Anchor[];
   verdicts: Verdict[];
 }
 
-// What SessionStart injects: the anchors of the session's latest cycle, with their verdicts.
-// Anchors still carrying a NULL verdict are excluded, so an unreconciled cycle reads as empty
-// rather than as a cycle that dropped nothing.
+// What SessionStart injects: the anchors of the session's latest cycle. A reconciled cycle carries
+// a verdict per anchor; an unreconciled one carries the anchors alone, and the renderer labels
+// them unchecked rather than dropped.
 //
-// The lookup is the session's newest cycle row or nothing. Falling back to an older reconciled
-// cycle, or to another session in the same project database, would inject a stale index labelled
-// as this cycle's — anchor ids are session-local, so its entries would not even address the right
-// rows. Injection is per-session by contract; project scope belongs to `seb search`.
-export function latestReconciledCycle(db: DatabaseSync, sessionId?: string | null): ReconciledCycle | null {
-  const row = pickCycle(db, sessionId);
-  return row === null ? null : loadCycle(db, row.sessionId, row.cycle);
+// The lookup is the session's newest cycle row or nothing. Falling back to an older cycle, or to
+// another session in the same project database, would inject a stale index labelled as this
+// cycle's — anchor ids are session-local, so its entries would not even address the right rows.
+// Injection is per-session by contract; project scope belongs to `seb search`.
+export function latestCycle(db: DatabaseSync, sessionId?: string | null): CycleIndex | null {
+  if (sessionId === undefined || sessionId === null) return null;
+  const row = db
+    .prepare('SELECT session_id, cycle, reconciled_at FROM cycles WHERE session_id = ? ORDER BY cycle DESC LIMIT 1')
+    .get(sessionId);
+  if (row === undefined) return null;
+  return loadCycle(db, row.session_id as string, Number(row.cycle), row.reconciled_at !== null);
 }
 
 // What `seb index` reports: the project's most recently reconciled cycle, whichever session it
 // belongs to. The CLI runs from a shell and is never told the caller's session id, and the id it
 // could guess would be the wrong one as often as not — so the CLI reads the project, the way
 // `seb search` does, while injection stays per-session.
-export function newestReconciledCycle(db: DatabaseSync): ReconciledCycle | null {
+export function newestReconciledCycle(db: DatabaseSync): CycleIndex | null {
   const row = db
     .prepare(
       'SELECT session_id, cycle FROM cycles WHERE reconciled_at IS NOT NULL ' +
@@ -397,31 +402,26 @@ export function newestReconciledCycle(db: DatabaseSync): ReconciledCycle | null 
     )
     .get();
   if (row === undefined) return null;
-  return loadCycle(db, row.session_id as string, Number(row.cycle));
+  return loadCycle(db, row.session_id as string, Number(row.cycle), true);
 }
 
-function loadCycle(db: DatabaseSync, sessionId: string, cycle: number): ReconciledCycle {
+// A cycle holds either reconciled anchors or unreconciled ones, never a mixture: a verdict lands
+// on every anchor of a cycle or on none of them.
+function loadCycle(db: DatabaseSync, sessionId: string, cycle: number, reconciled: boolean): CycleIndex {
   const rows = db
     .prepare(
       'SELECT id, uuid, session_id, cycle, turn, type, key, excerpt, verdict, score FROM anchors ' +
-        'WHERE session_id = ? AND cycle = ? AND verdict IS NOT NULL ORDER BY turn, rowid',
+        `WHERE session_id = ? AND cycle = ? AND verdict IS ${reconciled ? 'NOT NULL' : 'NULL'} ` +
+        'ORDER BY turn, rowid',
     )
     .all(sessionId, cycle);
   return {
     sessionId,
     cycle,
+    reconciled,
     anchors: rows.map(rowToAnchor),
-    verdicts: rows.map(rowToVerdict),
+    verdicts: reconciled ? rows.map(rowToVerdict) : [],
   };
-}
-
-function pickCycle(db: DatabaseSync, sessionId?: string | null): { sessionId: string; cycle: number } | null {
-  if (sessionId === undefined || sessionId === null) return null;
-  const row = db
-    .prepare('SELECT session_id, cycle, reconciled_at FROM cycles WHERE session_id = ? ORDER BY cycle DESC LIMIT 1')
-    .get(sessionId);
-  if (row === undefined || row.reconciled_at === null) return null;
-  return { sessionId: row.session_id as string, cycle: Number(row.cycle) };
 }
 
 function rowToVerdict(row: Record<string, unknown>): Verdict {

@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
-import { logTelemetry, newestReconciledCycle, type ReconciledCycle } from '../store/db.js';
+import { logTelemetry, newestReconciledCycle, type CycleIndex } from '../store/db.js';
 import { renderForgottenIndex } from '../reconcile/render.js';
 import type { Anchor } from '../transcript/anchors.js';
 import { usageWrap } from './args.js';
@@ -53,7 +53,7 @@ function parseIndex(argv: string[]): Options {
 }
 
 // The anchors and verdicts of a reconciled cycle arrive as parallel lists in one order.
-function select(cycle: ReconciledCycle, opts: Options): Entry[] {
+function select(cycle: CycleIndex, opts: Options): Entry[] {
   const entries = cycle.anchors.map((anchor, i) => ({
     anchor,
     verdict: cycle.verdicts[i]?.verdict ?? 'dropped',
@@ -62,7 +62,7 @@ function select(cycle: ReconciledCycle, opts: Options): Entry[] {
   return opts.list === 'all' ? entries : entries.filter((e) => e.verdict === 'dropped');
 }
 
-function renderInjected(cycle: ReconciledCycle): string {
+function renderInjected(cycle: CycleIndex): string {
   const text = renderForgottenIndex(cycle.verdicts, cycle.anchors, {
     tier: 'full',
     budget: OUTPUT_TOKENS,
@@ -73,7 +73,7 @@ function renderInjected(cycle: ReconciledCycle): string {
   return capOutput(text, OUTPUT_TOKENS, HINT);
 }
 
-function renderList(cycle: ReconciledCycle, entries: Entry[], opts: Options): string {
+function renderList(cycle: CycleIndex, entries: Entry[], opts: Options): string {
   const qualified = spansSessions(entries.map((e) => e.anchor));
   const dropped = cycle.verdicts.filter((v) => v.verdict === 'dropped').length;
   const heading =

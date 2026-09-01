@@ -20,9 +20,26 @@ const DIGEST_ENTRY_CAP = 5;
 const UNCERTAIN_MIN = 0.25;
 const UNCERTAIN_MAX = 0.5;
 
-const HEADER = '## Forgotten Index';
 const UNCERTAIN_HEADING = 'Possibly paraphrased — verify against the summary before retrieving:';
-const FOOTER = 'Run `seb index --dropped` for the full list; `seb show <id>` retrieves an original.';
+
+// The header, the line under it, and the pointer that closes the block. All three always render,
+// so a cycle whose entries do not fit the budget still says what it holds and where to look.
+interface Chrome {
+  header: string;
+  note: string;
+  footer: string;
+}
+
+const DROPPED_CHROME = {
+  header: '## Forgotten Index',
+  footer: 'Run `seb index --dropped` for the full list; `seb show <id>` retrieves an original.',
+};
+
+const UNRECONCILED_CHROME: Chrome = {
+  header: '## Forgotten Index — unreconciled',
+  note: 'No summary reached Sebastian for this compaction, so these anchors were never checked against one. Each existed before the boundary; whether the summary kept it is unknown.',
+  footer: 'Check each against the summary you hold; `seb show <id>` retrieves an original, and `seb timeline` maps the cycle.',
+};
 
 interface Entry {
   anchor: Anchor;
@@ -41,7 +58,22 @@ export function renderForgottenIndex(
     .filter((d) => LISTED.has(d.anchor.type))
     .sort(byPriority)
     .slice(0, cap);
-  return fitToBudget(entries, countsLine(dropped, verdicts.length), opts.budget);
+  const chrome = { ...DROPPED_CHROME, note: countsLine(dropped, verdicts.length) };
+  return fitToBudget(entries, chrome, opts.budget);
+}
+
+// The degraded path: PostCompact never saw a summary, so no anchor carries a verdict. The cycle's
+// highest-priority anchors still list, because a reader who knows what existed before the
+// boundary can check the summary itself — but nothing here claims a loss, and the counts line is
+// replaced by the reason there is none.
+export function renderUnreconciledIndex(anchors: Anchor[], opts: RenderOptions): string {
+  const entries = anchors
+    .filter((a) => LISTED.has(a.type))
+    .map((anchor) => ({ anchor, score: 0 }))
+    .sort(byPriority)
+    .slice(0, opts.tier === 'digest' ? DIGEST_ENTRY_CAP : Infinity);
+  if (entries.length === 0) return '';
+  return fitToBudget(entries, UNRECONCILED_CHROME, opts.budget);
 }
 
 function joinDropped(verdicts: Verdict[], anchors: Anchor[]): Entry[] {
@@ -71,20 +103,20 @@ function countsLine(dropped: Entry[], total: number): string {
 
 // Lowest-priority entries are cut first until the estimate fits the budget; the header, counts,
 // and pointer always render, so an over-budget cycle still reports what it cannot list.
-function fitToBudget(entries: Entry[], counts: string, budget: number): string {
+function fitToBudget(entries: Entry[], chrome: Chrome, budget: number): string {
   for (let n = entries.length; n > 0; n -= 1) {
-    const text = renderText(entries.slice(0, n), counts);
+    const text = renderText(entries.slice(0, n), chrome);
     if (estimateTokens(text) <= budget) return text;
   }
-  return renderText([], counts);
+  return renderText([], chrome);
 }
 
-function renderText(entries: Entry[], counts: string): string {
+function renderText(entries: Entry[], chrome: Chrome): string {
   const plain = entries.filter((d) => !isUncertain(d)).map(entryLine);
   const uncertain = entries.filter(isUncertain).map(entryLine);
-  const lines = [HEADER, counts, ...plain];
+  const lines = [chrome.header, chrome.note, ...plain];
   if (uncertain.length > 0) lines.push(UNCERTAIN_HEADING, ...uncertain);
-  lines.push(FOOTER);
+  lines.push(chrome.footer);
   return `${lines.join('\n')}\n`;
 }
 

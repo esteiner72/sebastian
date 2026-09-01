@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
-import { latestReconciledCycle, openDb, projectSlug } from '../src/store/db.js';
+import { latestCycle, openDb, projectSlug } from '../src/store/db.js';
 import { renderForgottenIndex } from '../src/reconcile/render.js';
 import { preCompact } from '../src/hooks/preCompact.js';
 import { postCompact } from '../src/hooks/postCompact.js';
@@ -104,6 +104,13 @@ const payload = (fields: Record<string, unknown>): string => JSON.stringify(fiel
 const count = (db: DatabaseSync, sql: string): number => Number(db.prepare(`SELECT COUNT(*) AS n ${sql}`).get()?.n);
 
 const entryLines = (text: string): string[] => text.split('\n').filter((l) => l.startsWith('- t'));
+
+// The anchor id an index entry points at, and the ids a query holds. An injected entry that names
+// an id from another cycle or another session cannot be retrieved: ids are session-local.
+const entryIds = (text: string): string[] => entryLines(text).map((l) => l.split(' ')[1] ?? '');
+
+const anchorIds = (db: DatabaseSync, where: string): string[] =>
+  db.prepare(`SELECT id FROM anchors ${where}`).all().map((r) => String(r.id));
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
 
@@ -242,7 +249,7 @@ describe('session-start tier selection', () => {
     // therefore renders fewer of them. Both halves are needed: the first alone would also pass
     // with the entry cap doing the work, and the second alone with any budget at all.
     const db = openDb(projectSlug(cwd));
-    const cycle = latestReconciledCycle(db, session);
+    const cycle = latestCycle(db, session);
     const untruncated = renderForgottenIndex(cycle?.verdicts ?? [], cycle?.anchors ?? [], { tier: 'full', budget: 4000 });
     db.close();
     expect(entryLines(untruncated)).toHaveLength(4);
@@ -281,9 +288,11 @@ describe('degraded hook payloads', () => {
     db.close();
   });
 
-  it('leaves every verdict NULL when neither the payload nor the transcript carries a summary, and injects nothing', () => {
+  it('leaves every verdict NULL when neither the payload nor the transcript carries a summary, and injects the cycle labelled unreconciled', () => {
     const cwd = join(HOME, 'project-nosummary');
-    const session = 'fix-nosummary';
+    // The fixture's own session id: anchors carry the id written in the records, so a cycle row
+    // recorded under any other id would address none of them.
+    const session = 'fix-seven';
     const path = writeTranscript(cwd, session, [
       ...readFileSync(SEVEN_TYPES, 'utf8').split('\n').filter((l) => l.trim() !== ''),
       boundaryRecord(session, 'b9', ['u7']),
@@ -302,7 +311,13 @@ describe('degraded hook payloads', () => {
     expect(count(db, 'FROM anchors WHERE verdict IS NOT NULL')).toBe(0);
     db.close();
 
-    expect(runHook('session-start', sessionStart, payload({ session_id: session, cwd, source: 'compact' }))).toBe('');
+    // Nothing was checked, so nothing may read as dropped — but the anchors that existed before
+    // the boundary are still the reader's pointer, and they inject under the unreconciled label.
+    const context = injected(runHook('session-start', sessionStart,
+      payload({ session_id: session, cwd, source: 'compact' })));
+    expect(context).toContain('## Forgotten Index — unreconciled');
+    expect(context).not.toContain('Dropped this cycle');
+    expect(entryLines(context).length).toBeGreaterThan(0);
   });
 
   it('cedes precedence to a /compact argument with one appended line, so steering cannot contradict an explicit user instruction', () => {
@@ -352,11 +367,16 @@ describe('degraded hook payloads', () => {
       { cycle: 1, summary: null, reconciled_at: null },
     ]);
     expect(count(db, 'FROM anchors WHERE cycle = 1 AND verdict IS NOT NULL')).toBe(0);
+    const thisCycle = anchorIds(db, 'WHERE cycle = 1');
     db.close();
 
-    // The session's latest cycle is unreconciled, so nothing is injected — not cycle 0's index
-    // relabelled as this cycle's.
-    expect(runHook('session-start', sessionStart, payload({ session_id: session, cwd, source: 'compact' }))).toBe('');
+    // The session's latest cycle injects its own anchors under the unreconciled label — never
+    // cycle 0's verdicts relabelled as this cycle's.
+    const context = injected(runHook('session-start', sessionStart,
+      payload({ session_id: session, cwd, source: 'compact' })));
+    expect(context).toContain('## Forgotten Index — unreconciled');
+    expect(entryIds(context).length).toBeGreaterThan(0);
+    expect(entryIds(context).filter((id) => !thisCycle.includes(id))).toEqual([]);
   });
 
   it('never injects another session\'s reconciled cycle when this session\'s verdicts are NULL', () => {
@@ -386,7 +406,15 @@ describe('degraded hook payloads', () => {
     runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: path, cwd }));
     runHook('post-compact', postCompact, payload({ session_id: session, transcript_path: path, cwd }));
 
-    expect(runHook('session-start', sessionStart, payload({ session_id: session, cwd, source: 'compact' }))).toBe('');
+    const db = openDb(projectSlug(cwd));
+    const mine = anchorIds(db, `WHERE session_id = '${session}'`);
+    db.close();
+
+    const context = injected(runHook('session-start', sessionStart,
+      payload({ session_id: session, cwd, source: 'compact' })));
+    expect(context).toContain('## Forgotten Index — unreconciled');
+    expect(entryIds(context).length).toBeGreaterThan(0);
+    expect(entryIds(context).filter((id) => !mine.includes(id))).toEqual([]);
   });
 
   it('recovers the summary from the transcript when the payload omits it, and reconciles only the compacting cycle', () => {

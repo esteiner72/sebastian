@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { Anchor, AnchorType } from '../src/transcript/anchors.js';
 import { reconcile } from '../src/reconcile/reconcile.js';
 import type { Verdict } from '../src/reconcile/reconcile.js';
-import { renderForgottenIndex } from '../src/reconcile/render.js';
+import { renderForgottenIndex, renderUnreconciledIndex } from '../src/reconcile/render.js';
 
 const golden = (name: string): string =>
   readFileSync(fileURLToPath(new URL(`./golden/${name}`, import.meta.url)), 'utf8');
@@ -147,6 +147,13 @@ describe('renderForgottenIndex', () => {
   it('a tight budget cuts lowest-priority entries first, taking the band-2 heading with its last entry', () => {
     expect(renderForgottenIndex(verdicts, anchors, { tier: 'full', budget: 100 }))
       .toBe(golden('index-truncated.txt'));
+  });
+
+  // The degraded path. Nothing here may read as a loss claim: no verdict exists, so no anchor is
+  // dropped, and the band headings that depend on a score must not appear either.
+  it('labels a summary-less cycle unreconciled and bands none of its anchors, so an unchecked anchor is never presented as dropped', () => {
+    expect(renderUnreconciledIndex(anchors, { tier: 'digest', budget: 400 }))
+      .toBe(golden('index-unreconciled.txt'));
   });
 
   it('renders the empty string when nothing was dropped, so a lossless cycle injects nothing', () => {
