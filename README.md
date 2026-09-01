@@ -1,5 +1,9 @@
 # Sebastian
 
+[![CI](https://github.com/esteiner72/sebastian/actions/workflows/ci.yml/badge.svg)](https://github.com/esteiner72/sebastian/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/esteiner72/sebastian)](LICENSE)
+[![Node](https://img.shields.io/badge/node-22.16%2B%20%7C%2024%2B-brightgreen)](#requirements)
+
 Sebastian is a Claude Code plugin that makes compaction recoverable. He is also my dog.
 
 When Claude Code compacts a conversation, a summary replaces the transcript. The raw transcript
