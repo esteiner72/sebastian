@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-09-01T20:00:20.708Z",
+  "generatedAt": "2026-09-01T19:48:14.401Z",
   "commit": "6d4deaba4ad260231ccfe9d9b4cf8e8395b89672",
   "aggregate": {
-    "recall": 0.8696,
-    "precision": 0.6897,
-    "indexTokens": 108,
-    "recallPerKToken": 8.0519,
+    "recall": 0.9565,
+    "precision": 0.6471,
+    "indexTokens": 118,
+    "recallPerKToken": 8.1059,
     "steeringLift": 0.1
   },
   "perCase": {
@@ -24,10 +24,10 @@
       "steeringLift": null
     },
     "basename-kept": {
-      "recall": 0.5,
-      "precision": 0.5,
-      "indexTokens": 119,
-      "recallPerKToken": 4.2017,
+      "recall": 1,
+      "precision": 0.6667,
+      "indexTokens": 155,
+      "recallPerKToken": 6.4516,
       "steeringLift": null
     },
     "bash-reread": {
@@ -38,10 +38,10 @@
       "steeringLift": null
     },
     "digest-overflow": {
-      "recall": 0.8333,
-      "precision": 1,
-      "indexTokens": 137,
-      "recallPerKToken": 6.0825,
+      "recall": 1,
+      "precision": 0.8571,
+      "indexTokens": 173,
+      "recallPerKToken": 5.7803,
       "steeringLift": null
     },
     "first-of-two": {
@@ -53,16 +53,16 @@
     },
     "instruction-dropped": {
       "recall": 1,
-      "precision": 1,
-      "indexTokens": 60,
-      "recallPerKToken": 16.6667,
+      "precision": 0.5,
+      "indexTokens": 96,
+      "recallPerKToken": 10.4167,
       "steeringLift": null
     },
     "mention-not-action": {
       "recall": 1,
-      "precision": 0.5,
-      "indexTokens": 106,
-      "recallPerKToken": 9.434,
+      "precision": 0.3333,
+      "indexTokens": 139,
+      "recallPerKToken": 7.1942,
       "steeringLift": null
     },
     "nearmiss-reask": {

@@ -19,7 +19,7 @@ interface Entry {
   score: number;
 }
 
-// The index the last compaction earned, on demand. With no flag it is the same tiered render that
+// The index the last compaction earned, on demand. With no flag it is the same render that
 // SessionStart injects; `--dropped` and `--all` list every anchor of the cycle instead, including
 // the types that are counted but never injected, and `--raw` adds the reconciler's score.
 export function indexCommand(db: DatabaseSync, argv: string[]): string {
@@ -34,7 +34,7 @@ export function indexCommand(db: DatabaseSync, argv: string[]): string {
   return opts.list === null ? renderInjected(cycle) : renderList(cycle, entries, opts);
 }
 
-// `--raw` on its own is the dropped list with scores: the tiered render has no slot for a score,
+// `--raw` on its own is the dropped list with scores: the injected render has no slot for a score,
 // so asking for scores is asking for the list.
 function parseIndex(argv: string[]): Options {
   const { values } = usageWrap(() =>
@@ -63,10 +63,7 @@ function select(cycle: CycleIndex, opts: Options): Entry[] {
 }
 
 function renderInjected(cycle: CycleIndex): string {
-  const text = renderForgottenIndex(cycle.verdicts, cycle.anchors, {
-    tier: 'full',
-    budget: OUTPUT_TOKENS,
-  });
+  const text = renderForgottenIndex(cycle.verdicts, cycle.anchors, OUTPUT_TOKENS);
   if (text === '') {
     return `Cycle ${cycle.cycle} of session ${cycle.sessionId} dropped nothing; the summary kept every anchor.\n`;
   }

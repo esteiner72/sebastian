@@ -44,13 +44,13 @@ describe('reconcile', () => {
     ]);
   });
 
-  it('keeps an edit anchor on a bare basename mention even when its content detail is gone — the pinned, accepted identifier false positive', () => {
-    const summary = 'Work so far: edited db.ts to enable WAL. The adapter file was not discussed.';
-    const mentioned = anchor('t8d1', 'edit', 8, 'src/store/db.ts');
-    const absent = anchor('t11d1', 'edit', 11, 'src/steer/adapt.ts');
-    expect(reconcile([mentioned, absent], summary, NONE, NONE)).toEqual([
-      { anchorId: 't8d1', sessionId: 's1', verdict: 'kept', score: 1 },
-      { anchorId: 't11d1', sessionId: 's1', verdict: 'dropped', score: 0 },
+  it('drops an edit anchor the summary names only by basename, and keeps a full-path mention at the mention score rather than as verbatim presence', () => {
+    const summary = 'Work so far: edited db.ts to enable WAL, then src/steer/adapt.ts for the phrase table.';
+    const basenameOnly = anchor('t8d1', 'edit', 8, 'src/store/db.ts');
+    const fullPath = anchor('t11d1', 'edit', 11, 'src/steer/adapt.ts');
+    expect(reconcile([basenameOnly, fullPath], summary, NONE, NONE)).toEqual([
+      { anchorId: 't8d1', sessionId: 's1', verdict: 'dropped', score: 0 },
+      { anchorId: 't11d1', sessionId: 's1', verdict: 'kept', score: 0.5 },
     ]);
   });
 
@@ -134,30 +134,25 @@ describe('renderForgottenIndex', () => {
     { anchorId: 't27r2', sessionId: 's1', verdict: 'kept', score: 1 },
   ];
 
-  it('digest tier lists the five highest-priority dropped anchors, reporting user and cmd drops by count only', () => {
-    expect(renderForgottenIndex(verdicts, anchors, { tier: 'digest', budget: 200 }))
-      .toBe(golden('index-digest.txt'));
+  it('lists every listable drop grouped by priority with the most recent first, and the band-2 entry under its verify-first heading', () => {
+    expect(renderForgottenIndex(verdicts, anchors, 400)).toBe(golden('index-default.txt'));
   });
 
-  it('full tier lists every listable dropped anchor in priority order, with the band-2 entry under its verify-first heading', () => {
-    expect(renderForgottenIndex(verdicts, anchors, { tier: 'full', budget: 800 }))
-      .toBe(golden('index-full.txt'));
-  });
-
-  it('a tight budget cuts lowest-priority entries first, taking the band-2 heading with its last entry', () => {
-    expect(renderForgottenIndex(verdicts, anchors, { tier: 'full', budget: 100 }))
-      .toBe(golden('index-truncated.txt'));
+  // Round one holds one entry per type; the second error is the whole of round two. A budget that
+  // fits round one and nothing more must cut that error, not the only edit, read, or url.
+  it('a budget that fits one round cuts the second error before any other type\'s only entry', () => {
+    expect(renderForgottenIndex(verdicts, anchors, 170)).toBe(golden('index-truncated.txt'));
   });
 
   // The degraded path. Nothing here may read as a loss claim: no verdict exists, so no anchor is
   // dropped, and the band headings that depend on a score must not appear either.
   it('labels a summary-less cycle unreconciled and bands none of its anchors, so an unchecked anchor is never presented as dropped', () => {
-    expect(renderUnreconciledIndex(anchors, { tier: 'digest', budget: 400 }))
+    expect(renderUnreconciledIndex(anchors, 400))
       .toBe(golden('index-unreconciled.txt'));
   });
 
   it('renders the empty string when nothing was dropped, so a lossless cycle injects nothing', () => {
     const allKept = verdicts.map((v): Verdict => ({ ...v, verdict: 'kept' }));
-    expect(renderForgottenIndex(allKept, anchors, { tier: 'digest', budget: 200 })).toBe('');
+    expect(renderForgottenIndex(allKept, anchors, 400)).toBe('');
   });
 });

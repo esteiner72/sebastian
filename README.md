@@ -77,9 +77,11 @@ cycle justifies.
 | The cycle | What Sebastian injects |
 | --- | --- |
 | Nothing dropped | Nothing |
-| Something dropped | A digest of about 150 tokens: counts by type, the highest-priority entries, and one pointer |
-| An error signature or an edited file path dropped | The full index, up to 800 tokens |
-| No summary reached Sebastian | The same digest, labelled unreconciled, because nothing was checked |
+| Something dropped | Up to 400 tokens: counts by type, one entry per type before a second of any, and one pointer |
+| No summary reached Sebastian | The same index, labelled unreconciled, because nothing was checked |
+
+Within a type the most recent entry comes first, so the work nearest the compaction is the work
+the index names.
 
 A bundled skill teaches the model to resolve an entry against the summary it already holds and to
 retrieve only what is genuinely missing.

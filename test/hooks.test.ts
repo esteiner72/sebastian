@@ -189,27 +189,25 @@ describe('the compaction cycle, hook by hook', () => {
     expect(count(after, 'FROM anchors')).toBe(11);
     after.close();
 
-    // SessionStart, matcher compact. Three error anchors dropped earns the full tier, which lists
-    // every listable drop: 3 error, 1 answer, 1 edit, 2 read, 1 url. The 2 cmd drops and the kept
-    // user anchor never spend an entry.
+    // SessionStart, matcher compact. Every listable drop fits the budget: 3 error, 1 answer,
+    // 1 edit, 2 read, 1 url. The 2 cmd drops and the kept user anchor never spend an entry.
     const context = injected(runHook('session-start', sessionStart,
       payload({ session_id: session, cwd, hook_event_name: 'SessionStart', source: 'compact' })));
     expect(context.startsWith('## Forgotten Index\n')).toBe(true);
     expect(context).toContain('Dropped this cycle: 3 error, 1 answer, 1 edit, 2 cmd, 2 read, 1 url (11 anchors reconciled).');
     expect(entryLines(context)).toHaveLength(8);
-    expect(estimateTokens(context)).toBeLessThanOrEqual(800);
+    expect(estimateTokens(context)).toBeLessThanOrEqual(400);
   });
 });
 
-// The digest is what a cycle gets when it lost nothing high-priority, and its budget is the only
-// thing that bounds it once the entry cap is not binding.
-describe('session-start tier selection', () => {
-  const cwd = join(HOME, 'project-digest');
-  const session = 'fix-digest';
+// The budget is the only thing that bounds an injection once every drop is listable.
+describe('session-start budget', () => {
+  const cwd = join(HOME, 'project-budget');
+  const session = 'fix-budget';
 
-  // Four question-and-answer pairs, so the cycle drops four `answer` anchors and no `error` or
-  // `edit` anchor at all. Each reply is long enough that four entries cannot fit the digest
-  // budget, which is what makes the arithmetic below hold.
+  // Ten question-and-answer pairs, so the cycle drops ten `answer` anchors. Each reply runs past
+  // the entry display width, so ten entries cannot fit the budget, which is what makes the
+  // arithmetic below hold.
   const pairs: [string, string, string, string][] = [
     ['u1', 'a2', 'Why does the summarizer drop long explanations first?',
       'The summarizer keeps identifiers when the compact instructions name them, and it collapses prose first, so a long session loses explanation before it loses a file path.'],
@@ -217,8 +215,20 @@ describe('session-start tier selection', () => {
       'An anchor survives when its message stays in context verbatim, or when the platform restores the file it names, and only the rest reach text matching.'],
     ['u5', 'a6', 'What happens when the transcript field arrives empty?',
       'An empty transcript field falls back to the newest file named for the session under the projects directory, and nothing is archived when no such file exists.'],
-    ['u7', 'a8', 'When does the digest give way to the full index?',
-      'The digest gives way to the full index only when a high-priority anchor was lost, because a fixed spend every cycle can cost more context than it recovers.'],
+    ['u7', 'a8', 'When does an index entry earn its tokens?',
+      'An entry earns its tokens when the anchor it names was ruled dropped and no earlier round of the fill has spent the ceiling, so each type gets a turn ahead of any second turn.'],
+    ['u9', 'a10', 'How does search reach across sessions?',
+      'Search reads the whole project database rather than one session, and a result set that spans sessions qualifies each id with its session prefix so that show can resolve it.'],
+    ['u11', 'a12', 'What does the steering block say on a fresh database?',
+      'A fresh database prints the base lines alone, because no verdict exists yet and an adaptive line without a drop-rate behind it would be a constant rather than a signal.'],
+    ['u13', 'a14', 'Where does the archive live on disk?',
+      'The archive lives in one SQLite file per project under the state directory, named from a slug of the working directory, so a second checkout of one repository never shares a file.'],
+    ['u15', 'a16', 'Which anchors never spend injected tokens?',
+      'Command anchors never spend injected tokens because a command line is the means of acquisition rather than the thing acquired, and user anchors wait until retrieval telemetry earns them a slot.'],
+    ['u17', 'a18', 'How is a turn number defined?',
+      'A turn is the record position in the transcript file, counting every record whether or not it yields an anchor, so a change in which record types the parser classifies cannot move an id.'],
+    ['u19', 'a20', 'Why is the reader the hardening pass?',
+      'The reader already holds the summary, so it can resolve a flagged paraphrase against it at zero latency, which is cheaper and more deterministic than any subprocess a hook could spawn.'],
   ];
 
   const transcript = [
@@ -229,13 +239,13 @@ describe('session-start tier selection', () => {
     // Two records that carry no anchor: a one-word thanks has too few content tokens, and its
     // reply answers no pending question. Preserving them keeps the preserved set realistic
     // without keeping an anchor.
-    userText(session, 'u9', 'Thanks.'),
-    assistantText(session, 'a10', 'Done.'),
-    boundaryRecord(session, 'b11', ['u9', 'a10']),
-    summaryRecord(session, 's12', SUMMARY),
+    userText(session, 'u21', 'Thanks.'),
+    assistantText(session, 'a22', 'Done.'),
+    boundaryRecord(session, 'b23', ['u21', 'a22']),
+    summaryRecord(session, 's24', SUMMARY),
   ];
 
-  it('bounds the digest by its token budget rather than its entry cap, listing fewer entries than the untruncated index holds', () => {
+  it('bounds the injected index by its token budget, listing fewer entries than the untruncated index holds', () => {
     const path = writeTranscript(cwd, session, transcript);
     runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: path, cwd }));
     runHook('post-compact', postCompact,
@@ -243,19 +253,19 @@ describe('session-start tier selection', () => {
 
     const context = injected(runHook('session-start', sessionStart,
       payload({ session_id: session, cwd, source: 'compact' })));
-    expect(context).toContain('Dropped this cycle: 4 answer (4 anchors reconciled).');
+    expect(context).toContain('Dropped this cycle: 10 answer (10 anchors reconciled).');
 
-    // The same four entries with no budget pressure exceed the digest budget, and the digest
-    // therefore renders fewer of them. Both halves are needed: the first alone would also pass
-    // with the entry cap doing the work, and the second alone with any budget at all.
+    // The same ten entries with no budget pressure exceed the budget, and the injection therefore
+    // renders fewer of them. Both halves are needed: the first alone would pass with any budget at
+    // all, and the second alone would pass if the renderer capped entries instead of tokens.
     const db = openDb(projectSlug(cwd));
     const cycle = latestCycle(db, session);
-    const untruncated = renderForgottenIndex(cycle?.verdicts ?? [], cycle?.anchors ?? [], { tier: 'full', budget: 4000 });
+    const untruncated = renderForgottenIndex(cycle?.verdicts ?? [], cycle?.anchors ?? [], 4000);
     db.close();
-    expect(entryLines(untruncated)).toHaveLength(4);
-    expect(estimateTokens(untruncated)).toBeGreaterThan(150);
-    expect(estimateTokens(context)).toBeLessThanOrEqual(150);
-    expect(entryLines(context).length).toBeLessThan(4);
+    expect(entryLines(untruncated)).toHaveLength(10);
+    expect(estimateTokens(untruncated)).toBeGreaterThan(400);
+    expect(estimateTokens(context)).toBeLessThanOrEqual(400);
+    expect(entryLines(context).length).toBeLessThan(10);
     expect(entryLines(context).length).toBeGreaterThan(0);
   });
 

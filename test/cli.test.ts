@@ -123,7 +123,7 @@ describe('cli rendering', () => {
     reconcileFixture(db);
     expect(indexCommand(db, ['--dropped', '--raw'])).toBe(golden('cli-index-dropped.txt'));
 
-    // Bare `seb index` is the same tiered render SessionStart injects, over the project's newest
+    // Bare `seb index` is the same render SessionStart injects, over the project's newest
     // reconciled cycle: a dropped `user` anchor is counted there but never listed, and `--dropped`
     // above is the only way to read it.
     const injected = indexCommand(db, []);

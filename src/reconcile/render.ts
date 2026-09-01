@@ -2,18 +2,12 @@ import type { Anchor, AnchorType } from '../transcript/anchors.js';
 import { estimateTokens, truncateAtWord } from '../transcript/text.js';
 import type { Verdict } from './reconcile.js';
 
-export interface RenderOptions {
-  tier: 'digest' | 'full';
-  budget: number;
-}
-
 // Injection priority. `user` and `cmd` drops are counted and archived but never spend injected
 // tokens: a dropped cmd is a weak loss signal, and `user` is demoted until retrieval telemetry
-// earns it a slot. The digest caps entries; the full tier fits as many as the budget allows.
+// earns it a slot.
 const PRIORITY: AnchorType[] = ['error', 'answer', 'edit', 'user', 'cmd', 'read', 'url'];
 const LISTED = new Set<AnchorType>(['error', 'answer', 'edit', 'read', 'url']);
 const PROSE = new Set<AnchorType>(['error', 'answer', 'user']);
-const DIGEST_ENTRY_CAP = 5;
 
 // Bands are presentation-only: identifiers and negligible-overlap prose list plainly, while a
 // near-miss on token overlap is the paraphrase signature and lists under a verify-first heading.
@@ -46,34 +40,24 @@ interface Entry {
   score: number;
 }
 
-export function renderForgottenIndex(
-  verdicts: Verdict[],
-  anchors: Anchor[],
-  opts: RenderOptions,
-): string {
+export function renderForgottenIndex(verdicts: Verdict[], anchors: Anchor[], budget: number): string {
   const dropped = joinDropped(verdicts, anchors);
   if (dropped.length === 0) return '';
-  const cap = opts.tier === 'digest' ? DIGEST_ENTRY_CAP : Infinity;
-  const entries = dropped
-    .filter((d) => LISTED.has(d.anchor.type))
-    .sort(byPriority)
-    .slice(0, cap);
+  const entries = dropped.filter((d) => LISTED.has(d.anchor.type));
   const chrome = { ...DROPPED_CHROME, note: countsLine(dropped, verdicts.length) };
-  return fitToBudget(entries, chrome, opts.budget);
+  return fitToBudget(entries, chrome, budget);
 }
 
 // The degraded path: PostCompact never saw a summary, so no anchor carries a verdict. The cycle's
-// highest-priority anchors still list, because a reader who knows what existed before the
-// boundary can check the summary itself — but nothing here claims a loss, and the counts line is
-// replaced by the reason there is none.
-export function renderUnreconciledIndex(anchors: Anchor[], opts: RenderOptions): string {
+// listable anchors still list, because a reader who knows what existed before the boundary can
+// check the summary itself — but nothing here claims a loss, and the counts line is replaced by
+// the reason there is none.
+export function renderUnreconciledIndex(anchors: Anchor[], budget: number): string {
   const entries = anchors
     .filter((a) => LISTED.has(a.type))
-    .map((anchor) => ({ anchor, score: 0 }))
-    .sort(byPriority)
-    .slice(0, opts.tier === 'digest' ? DIGEST_ENTRY_CAP : Infinity);
+    .map((anchor) => ({ anchor, score: 0 }));
   if (entries.length === 0) return '';
-  return fitToBudget(entries, UNRECONCILED_CHROME, opts.budget);
+  return fitToBudget(entries, UNRECONCILED_CHROME, budget);
 }
 
 function joinDropped(verdicts: Verdict[], anchors: Anchor[]): Entry[] {
@@ -86,9 +70,26 @@ function joinDropped(verdicts: Verdict[], anchors: Anchor[]): Entry[] {
   return dropped;
 }
 
+// Display order: grouped by type in priority order, most recent turn first within a type.
 function byPriority(a: Entry, b: Entry): number {
   const rank = PRIORITY.indexOf(a.anchor.type) - PRIORITY.indexOf(b.anchor.type);
-  return rank !== 0 ? rank : a.anchor.turn - b.anchor.turn;
+  return rank !== 0 ? rank : b.anchor.turn - a.anchor.turn;
+}
+
+// Fill order: one entry per type per round, types in priority order, most recent first within a
+// type. Truncation cuts from the end of this order, so the latest round goes first and a type with
+// many drops can never starve a type with one.
+function roundRobin(entries: Entry[]): Entry[] {
+  const sorted = [...entries].sort(byPriority);
+  const queues = PRIORITY.map((type) => sorted.filter((e) => e.anchor.type === type));
+  const order: Entry[] = [];
+  for (let round = 0; queues.some((q) => q.length > round); round += 1) {
+    for (const queue of queues) {
+      const entry = queue[round];
+      if (entry !== undefined) order.push(entry);
+    }
+  }
+  return order;
 }
 
 // The counts line covers every dropped type, including the count-only ones — a non-zero user
@@ -101,11 +102,13 @@ function countsLine(dropped: Entry[], total: number): string {
   return `Dropped this cycle: ${parts.join(', ')} (${total} anchors reconciled).`;
 }
 
-// Lowest-priority entries are cut first until the estimate fits the budget; the header, counts,
-// and pointer always render, so an over-budget cycle still reports what it cannot list.
+// Entries are taken in fill order and cut from its end until the estimate fits the budget; the
+// header, counts, and pointer always render, so an over-budget cycle still reports what it cannot
+// list. What survives renders in display order.
 function fitToBudget(entries: Entry[], chrome: Chrome, budget: number): string {
-  for (let n = entries.length; n > 0; n -= 1) {
-    const text = renderText(entries.slice(0, n), chrome);
+  const fill = roundRobin(entries);
+  for (let n = fill.length; n > 0; n -= 1) {
+    const text = renderText(fill.slice(0, n).sort(byPriority), chrome);
     if (estimateTokens(text) <= budget) return text;
   }
   return renderText([], chrome);

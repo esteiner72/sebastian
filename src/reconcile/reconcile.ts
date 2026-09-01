@@ -16,6 +16,10 @@ export interface Verdict {
 const IDENTIFIER_TYPES = new Set(['edit', 'read', 'cmd', 'url']);
 const KEEP_THRESHOLD = 0.5;
 
+// A summary that names an identifier held its identity, not its content. The verdict is kept, the
+// score says which kind of keep it was: Stage 0 and 0b keeps are verbatim presence at 1.0.
+const MENTION_SCORE = 0.5;
+
 // Stages, in order: exact keeps from the boundary's ground truth (preserved-verbatim message
 // uuids, then platform-restored file paths), then text matching against the summary. Only anchors
 // from replaced messages ever reach the matcher.
@@ -59,15 +63,11 @@ function dropped(anchor: Anchor, score: number): Verdict {
   return { anchorId: anchor.id, sessionId: anchor.sessionId, verdict: 'dropped', score };
 }
 
-// Containment of the normalized key; a path whose full form is absent falls back to its basename,
-// so `src/store/db.ts` counts as kept when the summary says `db.ts`. A bare path mention therefore
-// reads as kept even when the surrounding detail was dropped — a known, accepted false positive:
-// paths are not paraphrased, and identifiers are what steering tells the summarizer to keep.
+// Containment of the full normalized key, and nothing looser: a basename fallback would rule
+// `src/store/db.ts` kept when the summary says `db.ts`, and a URL kept on its last path segment.
 function identifierVerdict(anchor: Anchor, normSummary: string): Verdict {
   const key = stripPunct(normalize(anchor.key));
-  if (key !== '' && normSummary.includes(key)) return kept(anchor, 1);
-  const base = anchor.key.includes('/') ? stripPunct(normalize(basename(anchor.key))) : '';
-  if (base !== '' && normSummary.includes(base)) return kept(anchor, 1);
+  if (key !== '' && normSummary.includes(key)) return kept(anchor, MENTION_SCORE);
   return dropped(anchor, 0);
 }
 
@@ -103,9 +103,6 @@ function stripPunct(text: string): string {
   return text.replaceAll(/^[^a-z0-9/]+|[^a-z0-9/]+$/g, '');
 }
 
-function basename(path: string): string {
-  return path.split('/').filter((s) => s !== '').pop() ?? '';
-}
 
 function sentenceTokenSets(summary: string): Set<string>[] {
   return summary
