@@ -111,6 +111,17 @@ You and the model both reach the archive through the bundled `seb` command.
 Search covers the whole project rather than one session, and every command caps its output and tells
 you how to narrow the result.
 
+## Performance
+
+Measured on a 29 MB, 13,044-record transcript with six compactions.
+
+| Path | Cost |
+| --- | --- |
+| `seb show` retrieval | 0.01ms |
+| `seb search`, 100k anchors | 0.06ms |
+| Forgotten Index render, 1600 drops | 2ms |
+| Archive one compaction delta | 150ms |
+
 ## Privacy
 
 Sebastian makes no network calls. Archived transcripts, the index, and usage telemetry stay on your
