@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in the compaction loop, the Forgotten Index, or the seb command misbehaves.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The sequence of Claude Code actions that led here, including whether the compaction was `auto` or `manual`.
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: Output of `claude --version`.
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      description: Output of `node --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Hook diagnostics
+      description: >
+        Sebastian writes hook failures to stderr with the prefix `sebastian:`, which Claude Code
+        shows under `claude --debug`, and records them in the database at
+        `~/.claude/sebastian/<project>/sebastian.db`. Paste those lines and the output of
+        `seb status`. Redact paths, prompts, and anything that came from a tool result.
+      render: shell
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction
+      options:
+        - label: This report contains no transcript content, credentials, or private paths.
+          required: true

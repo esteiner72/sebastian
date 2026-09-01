@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/esteiner72/sebastian/security/advisories/new
+    about: Security problems go through private vulnerability reporting, not a public issue.

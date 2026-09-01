@@ -1,0 +1,28 @@
+name: Feature request
+description: Something compaction loses that Sebastian should recover, or a change to how it recovers it.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What compaction loses, or what the Forgotten Index fails to surface, in a concrete session.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This fits Sebastian's job of making one compaction recoverable. It is not a request for cross-session memory.
+          required: true
