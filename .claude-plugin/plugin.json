@@ -1,6 +1,6 @@
 {
   "name": "sebastian",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.2",
   "description": "Makes compaction recoverable: steers the summarizer, archives the transcript delta, and injects an index of what the summary dropped.",
   "author": {
     "name": "Ethan Steiner",

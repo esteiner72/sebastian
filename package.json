@@ -1,6 +1,6 @@
 {
   "name": "sebastian-cc",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.2",
   "description": "A Claude Code plugin that makes compaction recoverable",
   "license": "MIT",
   "author": {
