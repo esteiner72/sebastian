@@ -6,7 +6,7 @@
 // Exits 1 with one line per finding.
 import { readFileSync, statSync } from 'node:fs';
 
-const HOOK_EVENTS = ['PreCompact', 'PostCompact', 'SessionStart'];
+const HOOK_EVENTS = ['PreCompact', 'PostCompact', 'SessionStart', 'UserPromptSubmit'];
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));

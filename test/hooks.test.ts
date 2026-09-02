@@ -1,16 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
-import { latestCycle, openDb, projectSlug } from '../src/store/db.js';
+import { dbPath, latestCycle, openDb, projectSlug } from '../src/store/db.js';
 import { renderForgottenIndex } from '../src/reconcile/render.js';
-import { preCompact } from '../src/hooks/preCompact.js';
-import { postCompact } from '../src/hooks/postCompact.js';
-import { sessionStart } from '../src/hooks/sessionStart.js';
+import { readSummary } from '../src/reconcile/cycle.js';
+import { parseTranscript, readBoundaries } from '../src/transcript/parse.js';
 import { runHook } from '../src/hooks/runHook.js';
-import { main } from '../src/index.js';
+import { reconcileCommand } from '../src/cli/reconcile.js';
+import { status } from '../src/cli/status.js';
+import { HOOKS, main } from '../src/index.js';
 
 // Every hook runs against a real temporary home: the state database lands under it exactly as it
 // does in production, and so does the transcript that the empty-`transcript_path` fallback has to
@@ -114,13 +115,15 @@ const anchorIds = (db: DatabaseSync, where: string): string[] =>
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
 
-function injected(out: string): string {
+function injectedAs(out: string, event: string): string {
   const parsed = JSON.parse(out) as {
     hookSpecificOutput: { hookEventName: string; additionalContext: string };
   };
-  expect(parsed.hookSpecificOutput.hookEventName).toBe('SessionStart');
+  expect(parsed.hookSpecificOutput.hookEventName).toBe(event);
   return parsed.hookSpecificOutput.additionalContext;
 }
+
+const injected = (out: string): string => injectedAs(out, 'SessionStart');
 
 // One cycle end to end, through the same three entry points hooks/run-hook.sh reaches, with the
 // transcript growing in place at compaction the way Claude Code grows it.
@@ -138,12 +141,12 @@ describe('the compaction cycle, hook by hook', () => {
       'Exit code 1\nAssertionError: expected the reconciler to keep every error signature but the store returned an empty verdict list for the replayed cycle'),
   ];
 
-  it('archives the delta and prints steering without recording a cycle, then reconciles, persists verdicts and injects the full index', () => {
+  it('archives the delta and prints steering, hands the cycle on from PostCompact, then closes and injects it on the next prompt', () => {
     const path = writeTranscript(cwd, session, before);
 
     // PreCompact. Its stdout is the compact-instruction channel, and an empty database earns no
     // adaptive line, so the block is the base golden byte for byte.
-    const steering = runHook('pre-compact', preCompact,
+    const steering = runHook('pre-compact', HOOKS['pre-compact'],
       payload({ session_id: session, transcript_path: path, cwd, hook_event_name: 'PreCompact', trigger: 'manual' }));
     expect(steering).toBe(readFileSync(STEERING_BASE, 'utf8'));
 
@@ -165,34 +168,43 @@ describe('the compaction cycle, hook by hook', () => {
       restoredRecord(session, 'at13', '/repo/README.md'),
     ].join('\n')}\n`);
 
-    // PostCompact. Nothing reaches the user, so stdout stays empty. The trigger arrives as
-    // `compaction_trigger`, which is the name the hook reference documents; a hook that reads only
-    // the `trigger` a live probe recorded silently falls back to the boundary's own value.
-    expect(runHook('post-compact', postCompact,
-      payload({ session_id: session, transcript_path: path, cwd, hook_event_name: 'PostCompact', compaction_trigger: 'manual', compact_summary: SUMMARY })))
+    // PostCompact. Nothing reaches the user, so stdout stays empty. It closes nothing: the platform
+    // writes the boundary record only after this hook's process exits, so the cycle is handed on.
+    expect(runHook('post-compact', HOOKS['post-compact'],
+      payload({ session_id: session, transcript_path: path, cwd, hook_event_name: 'PostCompact' })))
       .toBe('');
+
+    const handed = openDb(projectSlug(cwd));
+    expect(count(handed, 'FROM cycles')).toBe(0);
+    expect(count(handed, 'FROM anchors WHERE verdict IS NOT NULL')).toBe(0);
+    expect(handed.prepare('SELECT cycle FROM pending').all()).toEqual([{ cycle: 0 }]);
+    handed.close();
+
+    // UserPromptSubmit, on the user's next message. It closes the cycle and injects in one pass.
+    // The trigger recorded is the boundary's own `auto`, which is what the platform wrote.
+    const context = injectedAs(runHook('user-prompt-submit', HOOKS['user-prompt-submit'],
+      payload({ session_id: session, transcript_path: path, cwd })), 'UserPromptSubmit');
 
     const after = openDb(projectSlug(cwd));
     expect(after.prepare('SELECT cycle, trigger, summary FROM cycles').all()).toEqual([
-      { cycle: 0, trigger: 'manual', summary: SUMMARY },
+      { cycle: 0, trigger: 'auto', summary: SUMMARY },
     ]);
+    expect(count(after, 'FROM pending')).toBe(0);
     // t7u1 rides the preserved-uuid stage to kept at 1.0 without consulting the summary; the
     // remaining 10 anchors share no token and no identifier with it, so they all drop.
     expect(after.prepare("SELECT id, score FROM anchors WHERE verdict = 'kept'").all())
       .toEqual([{ id: 't7u1', score: 1 }]);
     expect(count(after, "FROM anchors WHERE verdict = 'dropped'")).toBe(10);
-    // PostCompact archived the three records compaction appended after PreCompact ran — the
-    // boundary, the summary, and the restoration — because on a session's final compaction no
-    // later hook would, and they would not outlive transcript cleanup. They yield no anchors.
+    // The three records compaction appended after PreCompact ran — the boundary, the summary and
+    // the restoration — are archived here, because nothing else would and they do not outlive
+    // transcript cleanup. They yield no anchors.
     expect(count(after, 'FROM messages')).toBe(14);
     expect(count(after, "FROM messages WHERE uuid IN ('b11', 's12', 'at13')")).toBe(3);
     expect(count(after, 'FROM anchors')).toBe(11);
     after.close();
 
-    // SessionStart, matcher compact. Every listable drop fits the budget: 3 error, 1 answer,
-    // 1 edit, 2 read, 1 url. The 2 cmd drops and the kept user anchor never spend an entry.
-    const context = injected(runHook('session-start', sessionStart,
-      payload({ session_id: session, cwd, hook_event_name: 'SessionStart', source: 'compact' })));
+    // Every listable drop fits the budget: 3 error, 1 answer, 1 edit, 2 read, 1 url. The 2 cmd
+    // drops and the kept user anchor never spend an entry.
     expect(context.startsWith('## Forgotten Index\n')).toBe(true);
     expect(context).toContain('Dropped this cycle: 3 error, 1 answer, 1 edit, 2 cmd, 2 read, 1 url (11 anchors reconciled).');
     expect(entryLines(context)).toHaveLength(8);
@@ -201,12 +213,12 @@ describe('the compaction cycle, hook by hook', () => {
 });
 
 // The budget is the only thing that bounds an injection once every drop is listable.
-describe('session-start budget', () => {
+describe('injection budget', () => {
   const cwd = join(HOME, 'project-budget');
   const session = 'fix-budget';
 
-  // Ten question-and-answer pairs, so the cycle drops ten `answer` anchors. Each reply runs past
-  // the entry display width, so ten entries cannot fit the budget, which is what makes the
+  // Twelve question-and-answer pairs, so the cycle drops twelve `answer` anchors. Each reply runs
+  // past the entry display width, so twelve entries cannot fit the budget, which is what makes the
   // arithmetic below hold.
   const pairs: [string, string, string, string][] = [
     ['u1', 'a2', 'Why does the summarizer drop long explanations first?',
@@ -229,6 +241,10 @@ describe('session-start budget', () => {
       'A turn is the record position in the transcript file, counting every record whether or not it yields an anchor, so a change in which record types the parser classifies cannot move an id.'],
     ['u19', 'a20', 'Why is the reader the hardening pass?',
       'The reader already holds the summary, so it can resolve a flagged paraphrase against it at zero latency, which is cheaper and more deterministic than any subprocess a hook could spawn.'],
+    ['u21', 'a22', 'Why does PostCompact leave the cycle pending instead of closing it?',
+      'PostCompact leaves the cycle pending because the platform appends the boundary record only after the hook process exits, so the record it would need is never on disk while it runs.'],
+    ['u23', 'a24', 'What does the session prefix in the footer buy the reader?',
+      'The session prefix in the footer makes every retrieval command unambiguous across an archive holding several sessions, at the cost of one prefix rather than one per entry.'],
   ];
 
   const transcript = [
@@ -239,21 +255,21 @@ describe('session-start budget', () => {
     // Two records that carry no anchor: a one-word thanks has too few content tokens, and its
     // reply answers no pending question. Preserving them keeps the preserved set realistic
     // without keeping an anchor.
-    userText(session, 'u21', 'Thanks.'),
-    assistantText(session, 'a22', 'Done.'),
-    boundaryRecord(session, 'b23', ['u21', 'a22']),
-    summaryRecord(session, 's24', SUMMARY),
+    userText(session, 'u25', 'Thanks.'),
+    assistantText(session, 'a26', 'Done.'),
+    boundaryRecord(session, 'b27', ['u25', 'a26']),
+    summaryRecord(session, 's28', SUMMARY),
   ];
 
   it('bounds the injected index by its token budget, listing fewer entries than the untruncated index holds', () => {
     const path = writeTranscript(cwd, session, transcript);
-    runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: path, cwd }));
-    runHook('post-compact', postCompact,
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('post-compact', HOOKS['post-compact'],
       payload({ session_id: session, transcript_path: path, cwd, compact_summary: SUMMARY }));
 
-    const context = injected(runHook('session-start', sessionStart,
-      payload({ session_id: session, cwd, source: 'compact' })));
-    expect(context).toContain('Dropped this cycle: 10 answer (10 anchors reconciled).');
+    const context = injectedAs(runHook('user-prompt-submit', HOOKS['user-prompt-submit'],
+      payload({ session_id: session, transcript_path: path, cwd })), 'UserPromptSubmit');
+    expect(context).toContain('Dropped this cycle: 12 answer (12 anchors reconciled).');
 
     // The same ten entries with no budget pressure exceed the budget, and the injection therefore
     // renders fewer of them. Both halves are needed: the first alone would pass with any budget at
@@ -262,15 +278,15 @@ describe('session-start budget', () => {
     const cycle = latestCycle(db, session);
     const untruncated = renderForgottenIndex(cycle?.verdicts ?? [], cycle?.anchors ?? [], 4000);
     db.close();
-    expect(entryLines(untruncated)).toHaveLength(10);
+    expect(entryLines(untruncated)).toHaveLength(12);
     expect(estimateTokens(untruncated)).toBeGreaterThan(400);
     expect(estimateTokens(context)).toBeLessThanOrEqual(400);
-    expect(entryLines(context).length).toBeLessThan(10);
+    expect(entryLines(context).length).toBeLessThan(12);
     expect(entryLines(context).length).toBeGreaterThan(0);
   });
 
   it('emits a one-line availability note for matcher resume, not an index', () => {
-    const context = injected(runHook('session-start', sessionStart,
+    const context = injected(runHook('session-start', HOOKS['session-start'],
       payload({ session_id: session, cwd, source: 'resume' })));
     expect(context.split('\n')).toHaveLength(1);
     expect(context).toContain('seb search');
@@ -285,13 +301,13 @@ describe('degraded hook payloads', () => {
     const session = 'fix-nopath';
     writeTranscript(cwd, session, readFileSync(SEVEN_TYPES, 'utf8').split('\n').filter((l) => l.trim() !== ''));
 
-    expect(runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: '', cwd })))
+    expect(runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: '', cwd })))
       .toBe(readFileSync(STEERING_BASE, 'utf8'));
     const db = openDb(projectSlug(cwd));
     expect(count(db, 'FROM messages')).toBe(9);
 
     // No file anywhere for this session id: the archive is skipped, the steering channel is not.
-    expect(runHook('pre-compact', preCompact, payload({ session_id: 'no-such-session', transcript_path: '', cwd })))
+    expect(runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: 'no-such-session', transcript_path: '', cwd })))
       .toBe(readFileSync(STEERING_BASE, 'utf8'));
     expect(count(db, 'FROM messages')).toBe(9);
     expect(count(db, "FROM log WHERE level = 'warn'")).toBe(1);
@@ -308,8 +324,8 @@ describe('degraded hook payloads', () => {
       boundaryRecord(session, 'b9', ['u7']),
     ]);
 
-    runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: path, cwd }));
-    expect(runHook('post-compact', postCompact, payload({ session_id: session, transcript_path: path, cwd }))).toBe('');
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    expect(runHook('post-compact', HOOKS['post-compact'], payload({ session_id: session, transcript_path: path, cwd }))).toBe('');
 
     const db = openDb(projectSlug(cwd));
     // The cycle happened, so it is recorded — but matching against nothing would rule every
@@ -323,8 +339,8 @@ describe('degraded hook payloads', () => {
 
     // Nothing was checked, so nothing may read as dropped — but the anchors that existed before
     // the boundary are still the reader's pointer, and they inject under the unreconciled label.
-    const context = injected(runHook('session-start', sessionStart,
-      payload({ session_id: session, cwd, source: 'compact' })));
+    const context = injectedAs(runHook('user-prompt-submit', HOOKS['user-prompt-submit'],
+      payload({ session_id: session, transcript_path: path, cwd })), 'UserPromptSubmit');
     expect(context).toContain('## Forgotten Index — unreconciled');
     expect(context).not.toContain('Dropped this cycle');
     expect(entryLines(context).length).toBeGreaterThan(0);
@@ -332,18 +348,278 @@ describe('degraded hook payloads', () => {
 
   it('cedes precedence to a /compact argument with one appended line, so steering cannot contradict an explicit user instruction', () => {
     const cwd = join(HOME, 'project-custom');
-    const out = runHook('pre-compact', preCompact,
+    const out = runHook('pre-compact', HOOKS['pre-compact'],
       payload({ session_id: 'fix-custom', cwd, custom_instructions: 'focus on the auth work' }));
     expect(out).toBe(`${readFileSync(STEERING_BASE, 'utf8')}- The user's own compact instructions take precedence over the lines above wherever they conflict.\n`);
 
     // The probe observed custom_instructions: null on a bare /compact — no line for null, and
     // none for whitespace either.
-    expect(runHook('pre-compact', preCompact,
+    expect(runHook('pre-compact', HOOKS['pre-compact'],
       payload({ session_id: 'fix-custom', cwd, custom_instructions: null })))
       .toBe(readFileSync(STEERING_BASE, 'utf8'));
-    expect(runHook('pre-compact', preCompact,
+    expect(runHook('pre-compact', HOOKS['pre-compact'],
       payload({ session_id: 'fix-custom', cwd, custom_instructions: '  ' })))
       .toBe(readFileSync(STEERING_BASE, 'utf8'));
+  });
+
+
+
+
+  // The full production ordering, which no earlier test reproduced: PreCompact, then SessionStart
+  // 106 ms before PostCompact, then PostCompact, then the boundary, then the user's next message.
+  // Under this ordering SessionStart has nothing settled to inject and UserPromptSubmit delivers.
+  it('closes a cycle PostCompact could not reach and delivers its index on the next user message, exactly once', () => {
+    const cwd = join(HOME, 'project-ordering');
+    const session = 'fix-ordering';
+    const path = writeTranscript(cwd, session,
+      readFileSync(SEVEN_TYPES, 'utf8')
+        .split('\n')
+        .filter((l) => l.trim() !== '')
+        .map((l) => l.replaceAll('fix-seven', session)));
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+
+    // SessionStart fires before the cycle exists, exactly as the live logs recorded, and says so
+    // rather than injecting whatever older cycle the session holds.
+    expect(injected(runHook('session-start', HOOKS['session-start'], payload({ session_id: session, cwd, source: 'compact' }))))
+      .toContain('not ready yet');
+
+    // The platform writes the boundary and summary after PostCompact exits, which is the only
+    // ordering the live logs show. A synchronous append after the call reproduces it exactly.
+    runHook('post-compact', HOOKS['post-compact'],
+      payload({ session_id: session, transcript_path: path, cwd }));
+
+    // PostCompact hands the cycle on rather than closing it.
+    const handed = openDb(projectSlug(cwd));
+    expect(count(handed, 'FROM cycles')).toBe(0);
+    expect(count(handed, 'FROM pending')).toBe(1);
+    handed.close();
+
+    appendFileSync(path, `${[
+      boundaryRecord(session, 'b11', ['zz-none']),
+      summaryRecord(session, 's12', SUMMARY),
+    ].join('\n')}\n`);
+    const first = runHook('user-prompt-submit', HOOKS['user-prompt-submit'], payload({ session_id: session, transcript_path: path, cwd }));
+    const context = injectedAs(first, 'UserPromptSubmit');
+    expect(context).toContain('## Forgotten Index');
+    expect(entryIds(context).length).toBeGreaterThan(0);
+
+    const db = openDb(projectSlug(cwd));
+    expect(count(db, 'FROM cycles WHERE reconciled_at IS NOT NULL')).toBe(1);
+    expect(count(db, 'FROM pending')).toBe(0);
+    db.close();
+
+    // The budget is spent once. A second prompt in the same session must not repeat the index, and
+    // a later SessionStart after a compaction injects its note, never the index.
+    expect(runHook('user-prompt-submit', HOOKS['user-prompt-submit'], payload({ session_id: session, transcript_path: path, cwd }))).toBe('');
+    expect(injected(runHook('session-start', HOOKS['session-start'], payload({ session_id: session, cwd, source: 'compact' }))))
+      .not.toContain('## Forgotten Index');
+  });
+
+  // The eval harness drives SessionStart with source compact and discards what it prints, so it can
+  // never see that print. Before this branch existed, a session's second compaction injected the
+  // first compaction's index under a header reading "this cycle", 4.5 hours stale in the live log.
+  it('SessionStart after a compaction does not deliver the previous cycle\'s index as if it were this one, and does not mark it delivered', () => {
+    const cwd = join(HOME, 'project-previous');
+    const session = 'fix-previous';
+    const path = writeTranscript(cwd, session, [
+      userText(session, 'u1', 'Why does the archiver skip crash-torn trailing lines?'),
+      assistantText(session, 'a2',
+        'A crash-torn trailing line fails to parse, so the archiver skips that one record and keeps every complete earlier line instead of aborting the delta.'),
+      boundaryRecord(session, 'b3', ['zz-none']),
+      summaryRecord(session, 's4', SUMMARY),
+    ]);
+    // PreCompact closes the cycle whose boundary is already on disk: settled, and never injected.
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    const before = openDb(projectSlug(cwd));
+    expect(before.prepare('SELECT cycle, reconciled_at IS NOT NULL AS settled, injected_at, injected_tokens FROM cycles').all())
+      .toEqual([{ cycle: 0, settled: 1, injected_at: null, injected_tokens: null }]);
+    before.close();
+
+    // The next compaction starts. Its own cycle is not recorded yet; the only settled cycle is the
+    // previous one, and it must not go out as this one.
+    const context = injected(runHook('session-start', HOOKS['session-start'],
+      payload({ session_id: session, cwd, source: 'compact' })));
+    expect(context).toBe(
+      'Sebastian archived this compaction. Its Forgotten Index is not ready yet: it arrives with your next message, or run `seb index` now.',
+    );
+
+    // The note is charged to the newest cycle, and the cycle stays undelivered.
+    const after = openDb(projectSlug(cwd));
+    expect(after.prepare('SELECT injected_at, injected_tokens FROM cycles').all())
+      .toEqual([{ injected_at: null, injected_tokens: estimateTokens(context) }]);
+    after.close();
+  });
+
+  // The matcher sends only `compact` and `resume`, so the harness never drives any other source. If
+  // Claude Code renamed the field, a compact-triggered start would arrive unrecognized, and the only
+  // settled cycle it could inject is the previous compaction's.
+  it('SessionStart with a source the matcher never sends injects nothing, so a renamed field cannot deliver a previous cycle\'s index as this one', () => {
+    const cwd = join(HOME, 'project-unknown-source');
+    const session = 'fix-unknown-source';
+    const path = writeTranscript(cwd, session, [
+      userText(session, 'u1', 'Why does the archiver skip crash-torn trailing lines?'),
+      assistantText(session, 'a2',
+        'A crash-torn trailing line fails to parse, so the archiver skips that one record and keeps every complete earlier line instead of aborting the delta.'),
+      boundaryRecord(session, 'b3', ['zz-none']),
+      summaryRecord(session, 's4', SUMMARY),
+    ]);
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+
+    expect(runHook('session-start', HOOKS['session-start'],
+      payload({ session_id: session, cwd, source: 'startup' }))).toBe('');
+
+    const db = openDb(projectSlug(cwd));
+    expect(db.prepare('SELECT cycle, reconciled_at IS NOT NULL AS settled, injected_at, injected_tokens FROM cycles').all())
+      .toEqual([{ cycle: 0, settled: 1, injected_at: null, injected_tokens: null }]);
+    db.close();
+  });
+
+  // What the three live compactions produced: anchors archived, boundary on disk, no cycles row,
+  // verdicts NULL forever. Correctness cannot rest on the wait winning, so the next compaction
+  // closes whatever the last one left open.
+  it('reconciles a cycle that an earlier compaction left stranded, without any hook having observed it', () => {
+    const cwd = join(HOME, 'project-catchup');
+    const session = 'fix-catchup';
+    const path = writeTranscript(cwd, session, [
+      userText(session, 'u1', 'Why does the archiver skip crash-torn trailing lines?'),
+      assistantText(session, 'a2',
+        'A crash-torn trailing line fails to parse, so the archiver skips that one record and keeps every complete earlier line instead of aborting the delta.'),
+    ]);
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+
+    // The compaction happens and PostCompact never closes it — an expired wait, a crash, or a
+    // plugin installed mid-session.
+    appendFileSync(path, `${[
+      boundaryRecord(session, 'b3', ['zz-none']),
+      summaryRecord(session, 's4', SUMMARY),
+    ].join('\n')}\n`);
+
+    const stranded = openDb(projectSlug(cwd));
+    expect(count(stranded, 'FROM cycles')).toBe(0);
+    expect(count(stranded, 'FROM anchors WHERE verdict IS NOT NULL')).toBe(0);
+    stranded.close();
+
+    appendFileSync(path, `${userText(session, 'u5', 'Keep the archive writer batching under the same cap.')}\n`);
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+
+    const db = openDb(projectSlug(cwd));
+    expect(db.prepare('SELECT cycle, summary FROM cycles').all()).toEqual([{ cycle: 0, summary: SUMMARY }]);
+    expect(count(db, 'FROM cycles WHERE reconciled_at IS NOT NULL')).toBe(1);
+    expect(count(db, 'FROM anchors WHERE cycle = 0 AND verdict IS NOT NULL')).toBeGreaterThan(0);
+    db.close();
+  });
+
+  // Three live compactions failed this way and nothing said so. `seb status` reported the counts
+  // honestly but neutrally, and neutral counts are what a reader skips.
+  it('reports a compaction it could not close, and stops reporting it once the cycle is reconciled', () => {
+    const cwd = join(HOME, 'project-health');
+    const session = 'fix-health';
+    const path = writeTranscript(cwd, session,
+      readFileSync(SEVEN_TYPES, 'utf8')
+        .split('\n')
+        .filter((l) => l.trim() !== '')
+        .map((l) => l.replaceAll('fix-seven', session)));
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+
+    // An archive holding anchors and no cycle is not yet a fault: this project has not compacted.
+    const quiet = openDb(projectSlug(cwd));
+    expect(status(quiet, [])).not.toContain('not yet closed');
+    quiet.close();
+
+    // PostCompact runs and the boundary never arrives, which is the live failure exactly.
+    runHook('post-compact', HOOKS['post-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+
+    const broken = openDb(projectSlug(cwd));
+    expect(status(broken, [])).toContain('1 compaction not yet closed — run `seb reconcile` or compact again.');
+    broken.close();
+
+    appendFileSync(path, `${[
+      boundaryRecord(session, 'b9', ['u7']),
+      summaryRecord(session, 's10', SUMMARY),
+    ].join('\n')}\n`);
+    const db = openDb(projectSlug(cwd));
+    reconcileCommand(db, []);
+    expect(status(db, [])).not.toContain('not yet closed');
+    expect(count(db, 'FROM pending')).toBe(0);
+    db.close();
+  });
+
+  // The on-demand form of the same recovery, for a backlog nobody wants to wait a compaction to
+  // clear. Reported per cycle, because "recovered 3" without the cycles is not checkable.
+  it('recovers a stranded cycle on demand and reports each one, deriving the same verdicts a hook would', () => {
+    const cwd = join(HOME, 'project-cli-recover');
+    const session = 'fix-recover';
+    const path = writeTranscript(cwd, session,
+      readFileSync(SEVEN_TYPES, 'utf8')
+        .split('\n')
+        .filter((l) => l.trim() !== '')
+        .map((l) => l.replaceAll('fix-seven', session)));
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+
+    // The compaction lands after PreCompact, and nothing closes it.
+    appendFileSync(path, `${[
+      boundaryRecord(session, 'b9', ['u7']),
+      summaryRecord(session, 's10', SUMMARY),
+    ].join('\n')}\n`);
+
+    const db = openDb(projectSlug(cwd));
+    expect(reconcileCommand(db, [])).toBe(
+      '- fix-reco cycle 0: 9 verdicts over 9 anchors\nRecovered 1 cycle.\n',
+    );
+
+    // The one anchor the preserved set saved, which is what proves the verdicts were derived rather
+    // than defaulted: a cycle scored against nothing rules every anchor dropped.
+    expect(anchorIds(db, "WHERE verdict = 'kept'")).toEqual(['t7u1']);
+    expect(reconcileCommand(db, [])).toBe('Nothing to reconcile: every closed cycle has a row.\n');
+    db.close();
+  });
+
+  // A cycle whose summary never landed can never earn verdicts. Keyed on anchors with null
+  // verdicts, such a cycle would be re-parsed by every hook for the life of the archive.
+  it('stops revisiting a recovered cycle, including one whose summary can never be found', () => {
+    const cwd = join(HOME, 'project-catchup-terminal');
+    const session = 'fix-catchup-terminal';
+    const path = writeTranscript(cwd, session, [
+      userText(session, 'u1', 'Why does the archiver skip crash-torn trailing lines?'),
+      boundaryRecord(session, 'b2', ['zz-none']),
+    ]);
+    const recoveries = (db: DatabaseSync): number =>
+      count(db, "FROM log WHERE msg LIKE 'recovered cycle%'");
+
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    const first = openDb(projectSlug(cwd));
+    expect(first.prepare('SELECT cycle, summary, reconciled_at FROM cycles').all())
+      .toEqual([{ cycle: 0, summary: null, reconciled_at: null }]);
+    expect(recoveries(first)).toBe(1);
+    first.close();
+
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+
+    const db = openDb(projectSlug(cwd));
+    expect(recoveries(db)).toBe(1);
+    db.close();
+  });
+
+  // Recovery reconciles boundaries that are no longer the last one in the file, so the summary
+  // lookup has to be anchored to its own boundary. Taking the newest summary above the cycle reads
+  // the same in a one-boundary transcript and silently wrong in every other.
+  it('resolves each boundary to the summary that follows it, not to the newest summary in a transcript that holds two', () => {
+    const cwd = join(HOME, 'project-two-summaries');
+    const session = 'fix-two-summaries';
+    const path = writeTranscript(cwd, session, [
+      userText(session, 'u1', 'Why does the archiver skip crash-torn trailing lines?'),
+      boundaryRecord(session, 'b2', ['zz-none']),
+      summaryRecord(session, 's3', SUMMARY),
+      userText(session, 'u4', 'How does the store deduplicate messages archived twice?'),
+      boundaryRecord(session, 'b5', ['zz-none']),
+      summaryRecord(session, 's6', SECOND_SUMMARY),
+    ]);
+    const events = parseTranscript(path);
+    const boundaries = readBoundaries(events);
+    expect(boundaries.map((b) => b.cycle)).toEqual([0, 1]);
+    expect(boundaries.map((b) => readSummary(events, b))).toEqual([SUMMARY, SECOND_SUMMARY]);
+
   });
 
   it('never reconciles a second compaction against the previous cycle\'s summary, and never injects the stale index in its place', () => {
@@ -356,8 +632,8 @@ describe('degraded hook payloads', () => {
       boundaryRecord(session, 'b3', ['zz-none']),
       summaryRecord(session, 's4', SUMMARY),
     ]);
-    runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: path, cwd }));
-    runHook('post-compact', postCompact,
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('post-compact', HOOKS['post-compact'],
       payload({ session_id: session, transcript_path: path, cwd, compact_summary: SUMMARY }));
 
     // The second compaction appends its boundary, but its summary record has not landed and the
@@ -369,8 +645,8 @@ describe('degraded hook payloads', () => {
         'The store deduplicates on the message uuid primary key, so a second archive of the same delta inserts zero rows and the counts stay honest.'),
       boundaryRecord(session, 'b7', ['zz-none']),
     ].join('\n')}\n`);
-    runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: path, cwd }));
-    runHook('post-compact', postCompact, payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('post-compact', HOOKS['post-compact'], payload({ session_id: session, transcript_path: path, cwd }));
 
     const db = openDb(projectSlug(cwd));
     expect(db.prepare('SELECT cycle, summary, reconciled_at FROM cycles WHERE cycle = 1').all()).toEqual([
@@ -382,12 +658,13 @@ describe('degraded hook payloads', () => {
 
     // The session's latest cycle injects its own anchors under the unreconciled label — never
     // cycle 0's verdicts relabelled as this cycle's.
-    const context = injected(runHook('session-start', sessionStart,
-      payload({ session_id: session, cwd, source: 'compact' })));
+    const context = injectedAs(runHook('user-prompt-submit', HOOKS['user-prompt-submit'],
+      payload({ session_id: session, transcript_path: path, cwd })), 'UserPromptSubmit');
     expect(context).toContain('## Forgotten Index — unreconciled');
     expect(entryIds(context).length).toBeGreaterThan(0);
     expect(entryIds(context).filter((id) => !thisCycle.includes(id))).toEqual([]);
   });
+
 
   it('never injects another session\'s reconciled cycle when this session\'s verdicts are NULL', () => {
     const cwd = join(HOME, 'project-cross');
@@ -399,8 +676,8 @@ describe('degraded hook payloads', () => {
       boundaryRecord(other, 'xb3', ['zz-none']),
       summaryRecord(other, 'xs4', SUMMARY),
     ]);
-    runHook('pre-compact', preCompact, payload({ session_id: other, transcript_path: otherPath, cwd }));
-    runHook('post-compact', postCompact,
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: other, transcript_path: otherPath, cwd }));
+    runHook('post-compact', HOOKS['post-compact'],
       payload({ session_id: other, transcript_path: otherPath, cwd, compact_summary: SUMMARY }));
 
     // A second session in the same project database degrades: boundary, no summary anywhere.
@@ -413,15 +690,15 @@ describe('degraded hook payloads', () => {
         'The digest is bounded by its token budget rather than its entry cap, so a cycle of long excerpts renders fewer entries instead of a longer block.'),
       boundaryRecord(session, 'yb3', ['zz-none']),
     ]);
-    runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: path, cwd }));
-    runHook('post-compact', postCompact, payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('post-compact', HOOKS['post-compact'], payload({ session_id: session, transcript_path: path, cwd }));
 
     const db = openDb(projectSlug(cwd));
     const mine = anchorIds(db, `WHERE session_id = '${session}'`);
     db.close();
 
-    const context = injected(runHook('session-start', sessionStart,
-      payload({ session_id: session, cwd, source: 'compact' })));
+    const context = injectedAs(runHook('user-prompt-submit', HOOKS['user-prompt-submit'],
+      payload({ session_id: session, transcript_path: path, cwd })), 'UserPromptSubmit');
     expect(context).toContain('## Forgotten Index — unreconciled');
     expect(entryIds(context).length).toBeGreaterThan(0);
     expect(entryIds(context).filter((id) => !mine.includes(id))).toEqual([]);
@@ -436,8 +713,8 @@ describe('degraded hook payloads', () => {
       summaryRecord(session, 's10', SUMMARY),
     ]);
 
-    runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: path, cwd }));
-    runHook('post-compact', postCompact, payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('post-compact', HOOKS['post-compact'], payload({ session_id: session, transcript_path: path, cwd }));
 
     const db = openDb(projectSlug(cwd));
     expect(db.prepare('SELECT summary FROM cycles').all()).toEqual([{ summary: SUMMARY }]);
@@ -451,8 +728,8 @@ describe('degraded hook payloads', () => {
       summaryRecord(session, 's13', SECOND_SUMMARY),
       userText(session, 'u14', 'Never widen the anchor id grammar without bumping the major.'),
     ].join('\n')}\n`);
-    runHook('pre-compact', preCompact, payload({ session_id: session, transcript_path: path, cwd }));
-    runHook('post-compact', postCompact, payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('post-compact', HOOKS['post-compact'], payload({ session_id: session, transcript_path: path, cwd }));
 
     const after = openDb(projectSlug(cwd));
     // Cycle 0's verdicts are already final. Re-scoring them against a summary that never described
@@ -467,13 +744,54 @@ describe('degraded hook payloads', () => {
   });
 });
 
+// UserPromptSubmit runs on every prompt in every project. A read-only hook that opened the database
+// would give every directory the user types in an archive it never earned, and would make the
+// "fills at the first compaction" promise false.
+describe('archive creation', () => {
+  it('leaves no archive behind for a project that has never compacted, and still injects for one that has', () => {
+    const fresh = join(HOME, 'project-never-compacted');
+    expect(runHook('user-prompt-submit', HOOKS['user-prompt-submit'],
+      payload({ session_id: 'fix-fresh', cwd: fresh }))).toBe('');
+    expect(runHook('session-start', HOOKS['session-start'],
+      payload({ session_id: 'fix-fresh', cwd: fresh, source: 'compact' }))).toBe('');
+    expect(existsSync(dbPath(projectSlug(fresh)))).toBe(false);
+
+    // PreCompact is allowed to create one, which is what earns the project an archive.
+    const session = 'fix-earns';
+    const path = writeTranscript(fresh, session, [
+      userText(session, 'u1', 'Why does the archiver skip crash-torn trailing lines?'),
+    ]);
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd: fresh }));
+    expect(existsSync(dbPath(projectSlug(fresh)))).toBe(true);
+  });
+
+  // The payload carries no cwd, so the slug a failure would log into is the process working
+  // directory. Claude Code sends valid JSON, so this path is reached only by a broken caller, and
+  // that caller must not be what earns a directory an archive.
+  it('leaves no archive behind when a read-only hook receives a payload that does not parse', () => {
+    const scratch = join(HOME, 'project-bad-payload');
+    mkdirSync(scratch, { recursive: true });
+    const previous = process.cwd();
+    process.chdir(scratch);
+    try {
+      expect(runHook('user-prompt-submit', HOOKS['user-prompt-submit'], '{not json')).toBe('');
+      expect(existsSync(dbPath(projectSlug(process.cwd())))).toBe(false);
+    } finally {
+      process.chdir(previous);
+    }
+  });
+});
+
 // The hardest safety property in the design: no hook can break compaction. Both cases assert the
 // same two things — nothing on stdout, and no throw reaching the caller that exits 0.
 describe('fail-open', () => {
   it('swallows a throwing hook body, writes nothing to stdout, and records the reason in the log table', () => {
     const cwd = join(HOME, 'project-throw');
-    const out = runHook('pre-compact', () => {
-      throw new Error('deliberate hook failure');
+    const out = runHook('pre-compact', {
+      creates: true,
+      body: () => {
+        throw new Error('deliberate hook failure');
+      },
     }, payload({ session_id: 'fix-throw', cwd }));
     expect(out).toBe('');
 
@@ -492,13 +810,13 @@ describe('fail-open', () => {
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, projectSlug(cwd)), 'not a directory');
 
-    expect(runHook('pre-compact', preCompact, payload({ session_id: 'fix-blocked', cwd }))).toBe('');
+    expect(runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: 'fix-blocked', cwd }))).toBe('');
   });
 
   // An empty payload also produces empty stdout, so stdout alone cannot tell the two apart: the
   // log row is the only place a payload silently read as `{}` shows up.
   it('records a malformed payload as a parse failure rather than proceeding on an empty one', () => {
-    expect(runHook('post-compact', postCompact, '{not json')).toBe('');
+    expect(runHook('post-compact', HOOKS['post-compact'], '{not json')).toBe('');
 
     // Nothing parsed, so no cwd was available: the failure is logged against the process working
     // directory, which is the only project slug the hook can still name.

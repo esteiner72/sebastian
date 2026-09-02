@@ -1,0 +1,2 @@
+- fix-gone cycle 1: closed unreconciled, transcript no longer on disk
+Recovered 0 cycles, skipped 1.

@@ -111,11 +111,32 @@ yourself, the setup script links it globally where it can; if that did not happe
 | `seb index` | Show the current Forgotten Index |
 | `seb timeline` | Show the turn map for a cycle |
 | `seb status` | Show cycles, archive size, and steering state |
+| `seb log` | Show recent hook activity: what ran, when, and what it reported |
 | `seb report` | Print a JSON summary of how the loop behaved, holding no archived content |
+| `seb reconcile` | Judge any compaction whose bookkeeping did not finish |
 
 Search covers the whole project rather than one session. Every command caps its output and tells you
 how to narrow the result, except `seb report`, which prints one JSON document because a truncated
 one does not parse.
+
+## Archive layout
+
+Each project has one SQLite database at `~/.claude/sebastian/<project-slug>/sebastian.db`, where
+the slug is the working directory with every non-alphanumeric character replaced by a dash. The
+hooks write it and the `seb` commands read it. It holds six tables.
+
+| Table | What it holds |
+| --- | --- |
+| `messages` | Every archived transcript record, keyed by uuid, with its session, cycle, and turn |
+| `anchors` | The identifiers and excerpts extracted from those records, with the verdict and score each received at reconciliation |
+| `cycles` | One row per compaction: trigger, summary, token counts, when it was reconciled and injected, and what injection cost, including the one-line note printed when the next compaction starts |
+| `pending` | Compactions PostCompact observed but could not close, because Claude Code writes the `compact_boundary` record only after that hook exits |
+| `log` | One row per hook invocation carrying its duration, plus whatever each hook body reported |
+| `telemetry` | One row per `seb` command run, with what it searched for and how many anchors it hit |
+
+`seb log` reads the `log` table and its output stays on your machine, because hook messages can
+contain absolute transcript paths. `seb report` excludes the log for the same reason. A question that
+no command answers can be asked of the database directly with `sqlite3`.
 
 ## Performance
 
@@ -127,6 +148,13 @@ Measured on a 29 MB, 13,044-record transcript with six compactions.
 | `seb search`, 100k anchors | 0.06ms |
 | Forgotten Index render, 1600 drops | 2ms |
 | Archive one compaction delta | 150ms |
+| Hook on each prompt, no archive | 58ms |
+| Hook on each prompt, archive present | 62ms |
+
+Sebastian injects on your next prompt after a compaction, so it registers a `UserPromptSubmit` hook.
+Every prompt then starts a short-lived Node process, which is the cost above, and you pay it in
+every project once the plugin is installed. A project with no archive exits before it opens a
+database, so Sebastian still creates nothing until your first compaction.
 
 ## Privacy
 

@@ -24,16 +24,29 @@ interface Chrome {
   footer: string;
 }
 
-const DROPPED_CHROME = {
-  header: '## Forgotten Index',
-  footer: 'Run `seb index --dropped` for the full list; `seb show <id>` retrieves an original.',
-};
+const DROPPED_HEADER = '## Forgotten Index';
 
-const UNRECONCILED_CHROME: Chrome = {
+const UNRECONCILED_CHROME = {
   header: '## Forgotten Index — unreconciled',
   note: 'No summary reached Sebastian for this compaction, so these anchors were never checked against one. Each existed before the boundary; whether the summary kept it is unknown.',
-  footer: 'Check each against the summary you hold; `seb show <id>` retrieves an original, and `seb timeline` maps the cycle.',
 };
+
+// Anchor ids are session-local, so an archive holding several sessions holds the same id more than
+// once and a bare `seb show <id>` can fail as ambiguous. The footer carries the session prefix once,
+// which is cheaper than qualifying every entry and still unambiguous. A cycle never spans sessions,
+// so the first anchor names the session for all of them; the fallback exists only for the empty
+// list, which both renderers return before reaching here.
+function sessionPrefix(anchors: Anchor[]): string {
+  return anchors[0]?.sessionId.slice(0, 8) ?? '<session>';
+}
+
+function droppedFooter(prefix: string): string {
+  return `Run \`seb index --dropped\` for the full list; \`seb show ${prefix}/<id>\` retrieves an original.`;
+}
+
+function unreconciledFooter(prefix: string): string {
+  return `Check each against the summary you hold; \`seb show ${prefix}/<id>\` retrieves an original, and \`seb timeline\` maps the cycle.`;
+}
 
 interface Entry {
   anchor: Anchor;
@@ -44,7 +57,11 @@ export function renderForgottenIndex(verdicts: Verdict[], anchors: Anchor[], bud
   const dropped = joinDropped(verdicts, anchors);
   if (dropped.length === 0) return '';
   const entries = dropped.filter((d) => LISTED.has(d.anchor.type));
-  const chrome = { ...DROPPED_CHROME, note: countsLine(dropped, verdicts.length) };
+  const chrome = {
+    header: DROPPED_HEADER,
+    note: countsLine(dropped, verdicts.length),
+    footer: droppedFooter(sessionPrefix(dropped.map((d) => d.anchor))),
+  };
   return fitToBudget(entries, chrome, budget);
 }
 
@@ -57,7 +74,8 @@ export function renderUnreconciledIndex(anchors: Anchor[], budget: number): stri
     .filter((a) => LISTED.has(a.type))
     .map((anchor) => ({ anchor, score: 0 }));
   if (entries.length === 0) return '';
-  return fitToBudget(entries, UNRECONCILED_CHROME, budget);
+  const chrome = { ...UNRECONCILED_CHROME, footer: unreconciledFooter(sessionPrefix(anchors)) };
+  return fitToBudget(entries, chrome, budget);
 }
 
 function joinDropped(verdicts: Verdict[], anchors: Anchor[]): Entry[] {
@@ -140,10 +158,11 @@ function isUncertain(d: Entry): boolean {
   return PROSE.has(d.anchor.type) && d.score >= UNCERTAIN_MIN && d.score < UNCERTAIN_MAX;
 }
 
-// Every entry carries the exact retrieval command.
+// One entry per line: id, type, and enough content to recognize it. The retrieval command lives in
+// the footer, once, with the session prefix that makes it unambiguous.
 function entryLine(d: Entry): string {
   const a = d.anchor;
-  return `- ${a.id} ${a.type}: ${anchorDisplay(a)} — seb show ${a.id}`;
+  return `- ${a.id} ${a.type}: ${anchorDisplay(a)}`;
 }
 
 // What an anchor shows on one line, here and in the CLI. Prose entries display the verbatim

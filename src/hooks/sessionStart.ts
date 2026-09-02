@@ -1,68 +1,58 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { latestCycle, logEvent, recordInjection, type CycleIndex } from '../store/db.js';
-import { renderForgottenIndex, renderUnreconciledIndex } from '../reconcile/render.js';
+import { additionalContext } from '../reconcile/inject.js';
 import { estimateTokens, str } from '../transcript/text.js';
 import type { Payload } from './runHook.js';
-
-// One ceiling for every injection. The renderer fills it one type at a time, so a cycle that lost
-// a little spends a little, and a cycle that lost a lot still stops here.
-const BUDGET = 400;
 
 const RESUME_NOTE =
   'Sebastian archives this project\'s pre-compaction transcripts: `seb index` lists what the last summary dropped, `seb search <query>` finds an original.';
 
-// Matcher `compact` injects the Forgotten Index; matcher `resume` injects one line saying the
-// archive exists. An absent or unrecognized source takes the index path, which renders nothing
-// when nothing was dropped — the safe direction, since a renamed field would otherwise silence
-// injection with no symptom.
+const COMPACT_NOTE =
+  'Sebastian archived this compaction. Its Forgotten Index is not ready yet: it arrives with your next message, or run `seb index` now.';
+
+// Matcher `resume` injects one line saying the archive exists.
+//
+// Matcher `compact` injects one line saying the index is on its way. This hook runs before
+// PostCompact, so the cycle the compaction just created is never recorded yet, and any settled cycle
+// the session holds is a previous one. Injecting that would describe the wrong compaction under a
+// header that reads "this cycle". UserPromptSubmit delivers the right one on the next message.
+//
+// Accepted consequence: a previous cycle that was reconciled but never injected stays undelivered,
+// because UserPromptSubmit injects only the newest cycle. `seb index` still reaches it and
+// `seb status` reports it. Delivering a two-summaries-old index as this cycle's is worse than not
+// delivering it.
+//
+// The matcher sends `compact` and `resume` only. Any other source means the platform changed the
+// field, and injecting on a guess would deliver the previous cycle's index as this one, so the hook
+// stays silent and the log says why. UserPromptSubmit is the loop's only injector.
 export function sessionStart(db: DatabaseSync, payload: Payload): string {
   const cycle = latestCycle(db, str(payload.session_id));
-  if (source(payload) === 'resume') return resumeNote(db, cycle);
-  if (cycle === null) {
-    logEvent(db, 'session-start', 'info', 'no cycle to inject');
-    return '';
-  }
-  const text = render(cycle);
-  // What this cycle's index cost the context window, recorded before the text leaves the hook. An
-  // empty render spends nothing and records 0, which is a measurement rather than a missing one.
-  const tokens = text === '' ? 0 : estimateTokens(text);
-  recordInjection(db, cycle.sessionId, cycle.cycle, tokens);
-  logEvent(
-    db,
-    'session-start',
-    'info',
-    `cycle ${cycle.cycle}: ${cycle.reconciled ? 'reconciled' : 'unreconciled'} index, ` +
-      `${text.length} chars, ${tokens} tokens injected`,
-  );
-  return text === '' ? '' : additionalContext(text);
+  const src = source(payload);
+  if (src === 'resume') return resumeNote(db, cycle);
+  if (src === 'compact') return compactNote(db, cycle);
+  logEvent(db, 'session-start', 'info', `source ${src ?? 'absent'}: nothing to inject`);
+  return '';
 }
 
-// The note is Sebastian's cost too, so it is charged to the session's newest cycle. A session that
-// has never compacted has no cycle to charge, and the note goes unrecorded.
+// A note is Sebastian's cost too, so it is charged to the session's newest cycle. A session that
+// has never compacted has no cycle to charge, and the note goes unrecorded. A note never marks the
+// cycle delivered: it is not the index, and the index still has to reach the model.
 function resumeNote(db: DatabaseSync, cycle: CycleIndex | null): string {
-  if (cycle !== null) {
-    recordInjection(db, cycle.sessionId, cycle.cycle, estimateTokens(RESUME_NOTE));
-  }
-  return additionalContext(RESUME_NOTE);
+  chargeNote(db, cycle, RESUME_NOTE);
+  return additionalContext('SessionStart', RESUME_NOTE);
+}
+
+function compactNote(db: DatabaseSync, cycle: CycleIndex | null): string {
+  chargeNote(db, cycle, COMPACT_NOTE);
+  logEvent(db, 'session-start', 'info', 'compaction not yet settled; note injected');
+  return additionalContext('SessionStart', COMPACT_NOTE);
+}
+
+function chargeNote(db: DatabaseSync, cycle: CycleIndex | null, note: string): void {
+  if (cycle === null) return;
+  recordInjection(db, cycle.sessionId, cycle.cycle, estimateTokens(note));
 }
 
 function source(payload: Payload): string | null {
   return str(payload.source) ?? str(payload.matcher);
-}
-
-// A reconciled cycle injects what its drops earned. An unreconciled one lists the cycle's anchors
-// under the same ceiling, labelled so that nothing reads as a loss claim.
-function render(cycle: CycleIndex): string {
-  if (!cycle.reconciled) return renderUnreconciledIndex(cycle.anchors, BUDGET);
-  return renderForgottenIndex(cycle.verdicts, cycle.anchors, BUDGET);
-}
-
-// SessionStart's injection channel. The whole payload is one JSON line on stdout.
-function additionalContext(text: string): string {
-  return `${JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'SessionStart',
-      additionalContext: text,
-    },
-  })}\n`;
 }

@@ -188,7 +188,10 @@ describe('opening an archive built before the loop recorded cycles and injected 
     before.close();
 
     const db = openDbAt(path);
-    recordCycle(db, { sessionId: 'kept', cycle: 0, trigger: 'auto', summary: 'x', compactionMs: null });
+    recordCycle(db, {
+      sessionId: 'kept', cycle: 0, trigger: 'auto', summary: 'x', compactionMs: null,
+      preTokens: null, postTokens: null, cumulativeDroppedTokens: null,
+    });
     logTelemetry(db, { cmd: 'show', anchorType: 'error', hits: 1 });
     recordInjection(db, 'kept', 0, 118);
 

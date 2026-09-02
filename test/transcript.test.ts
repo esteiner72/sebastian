@@ -64,6 +64,9 @@ describe('boundary fixture', () => {
       cycle: 0,
       trigger: 'manual',
       durationMs: 50,
+      preTokens: 1000,
+      postTokens: 100,
+      cumulativeDroppedTokens: 900,
       preservedUuids: new Set(['u0', 'a1']),
       restoredPaths: new Set(['/repo/src/parser/index.ts', '/repo/src/parser/tokens.ts']),
     });
@@ -72,6 +75,9 @@ describe('boundary fixture', () => {
       cycle: 1,
       trigger: 'auto',
       durationMs: 60,
+      preTokens: 2000,
+      postTokens: 200,
+      cumulativeDroppedTokens: 1800,
       preservedUuids: new Set(['u14']),
       restoredPaths: new Set(['/repo/src/parser/lex.ts']),
     });

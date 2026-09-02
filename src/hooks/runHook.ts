@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { logEvent, openDb, projectSlug } from '../store/db.js';
+import { logEvent, openDb, openExistingDb, projectSlug } from '../store/db.js';
 import { str } from '../transcript/text.js';
 
 export type Payload = Record<string, unknown>;
@@ -10,6 +10,13 @@ export type Payload = Record<string, unknown>;
 // A hook body returns the text for stdout, or the empty string for nothing. It receives an open
 // database and the parsed payload, and it may throw: runHook is the only place that catches.
 export type HookBody = (db: DatabaseSync, payload: Payload) => string;
+
+export interface Hook {
+  body: HookBody;
+  // False for a hook that only reads. UserPromptSubmit runs on every prompt in every project, so
+  // opening unconditionally would give every directory an archive it never earned.
+  creates: boolean;
+}
 
 // The payload arrives on stdin. A read failure is indistinguishable from an empty payload here, so
 // it degrades to empty text on stderr rather than escaping into the hook and costing exit 0.
@@ -28,18 +35,20 @@ export function readStdin(): string {
 // Timing rides here rather than in the bodies, because this is the only place that sees a whole
 // invocation including the database open and the failure path. Exactly one row per invocation
 // carries an `ms`, which is what makes counting them equal to counting invocations.
-export function runHook(name: string, body: HookBody, stdin: string): string {
+export function runHook(name: string, hook: Hook, stdin: string): string {
   const started = performance.now();
   let payload: Payload = {};
   let db: DatabaseSync | null = null;
   try {
     payload = parsePayload(stdin);
-    db = openDb(projectSlug(str(payload.cwd) ?? process.cwd()));
-    const out = body(db, payload);
+    const slug = projectSlug(str(payload.cwd) ?? process.cwd());
+    db = hook.creates ? openDb(slug) : openExistingDb(slug);
+    if (db === null) return '';
+    const out = hook.body(db, payload);
     logEvent(db, name, 'info', 'complete', elapsed(started));
     return out;
   } catch (err) {
-    return reportFailure(name, payload, db, err, elapsed(started));
+    return reportFailure(name, payload, db, hook.creates, err, elapsed(started));
   } finally {
     closeQuietly(db);
   }
@@ -52,10 +61,15 @@ function elapsed(started: number): number {
 // The diagnostic write shares every failure mode with the write it reports — a locked, missing, or
 // read-only database — so it is best-effort, and stderr carries the reason either way. Diagnostics
 // never touch stdout: for PreCompact and SessionStart that channel is a protocol.
+//
+// A read-only hook that fails before it has a database records the failure on stderr alone. The
+// archive it would log into is one the project has not earned, and a malformed payload must not be
+// what creates it.
 function reportFailure(
-  name: string, payload: Payload, db: DatabaseSync | null, err: unknown, ms: number,
+  name: string, payload: Payload, db: DatabaseSync | null, creates: boolean, err: unknown, ms: number,
 ): string {
   process.stderr.write(`sebastian: ${name}: ${String(err)}\n`);
+  if (db === null && !creates) return '';
   try {
     const target = db ?? openDb(projectSlug(str(payload.cwd) ?? process.cwd()));
     logEvent(target, name, 'error', String(err), ms);
@@ -80,11 +94,6 @@ function parsePayload(stdin: string): Payload {
   return typeof parsed === 'object' && parsed !== null ? (parsed as Payload) : {};
 }
 
-// Two sources disagree on the field name — a live probe recorded `trigger`, the hook reference
-// documents `compaction_trigger` — so both are read and neither is assumed.
-export function hookTrigger(payload: Payload): string | null {
-  return str(payload.trigger) ?? str(payload.compaction_trigger);
-}
 
 // Known bug #13668: `transcript_path` arrives empty. The fallback is the newest file named for the
 // session id under any project directory, because a session that resumes in another directory
@@ -94,10 +103,13 @@ export function resolveTranscript(payload: Payload): string | null {
   if (declared !== null && declared !== '' && existsSync(declared)) return declared;
   const session = str(payload.session_id);
   if (session === null || session === '') return null;
-  return newestSessionFile(session);
+  return sessionTranscript(session);
 }
 
-function newestSessionFile(sessionId: string): string | null {
+// The newest file named for a session under any project directory, because a session that resumes
+// in another directory keeps its id. Also the only way a CLI command reaches a transcript: a
+// command is never told a session id by its caller, so it reads one out of the archive first.
+export function sessionTranscript(sessionId: string): string | null {
   const root = join(homedir(), '.claude', 'projects');
   let best: { path: string; mtimeMs: number } | null = null;
   for (const entry of listDir(root)) {

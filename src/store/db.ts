@@ -1,5 +1,5 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { chmodSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { toEvent, type TranscriptEvent } from '../transcript/parse.js';
@@ -21,6 +21,12 @@ export function dbPath(slug: string): string {
 
 export function openDb(slug: string): DatabaseSync {
   return openDbAt(dbPath(slug));
+}
+
+// For callers that must not bring an archive into existence. A project earns one at its first
+// compaction; a hook that only reads would otherwise create one in every directory it runs in.
+export function openExistingDb(slug: string): DatabaseSync | null {
+  return existsSync(dbPath(slug)) ? openDbAt(dbPath(slug)) : null;
 }
 
 // The schema file ships beside the compiled module — the build copies it into dist/store — and
@@ -50,6 +56,10 @@ const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
   ['log', 'ms', 'INTEGER'],
   ['telemetry', 'ms', 'INTEGER'],
   ['cycles', 'compaction_ms', 'INTEGER'],
+  ['cycles', 'injected_at', 'TEXT'],
+  ['cycles', 'pre_tokens', 'INTEGER'],
+  ['cycles', 'post_tokens', 'INTEGER'],
+  ['cycles', 'cumulative_dropped_tokens', 'INTEGER'],
 ];
 
 export function migrateColumns(db: DatabaseSync): void {
@@ -357,19 +367,93 @@ export interface CycleRecord {
   trigger: string | null;
   summary: string | null;
   compactionMs: number | null;
+  preTokens: number | null;
+  postTokens: number | null;
+  cumulativeDroppedTokens: number | null;
 }
 
-// PostCompact is the only writer of cycles rows, and it writes after reconciling — hence the
-// reconcile timestamp lands here. A cycle whose summary never reached us is recorded all the same,
-// because the compaction happened, but it stays unstamped: no summary means no verdicts, and a
-// timestamp would claim a reconciliation that never ran. OR REPLACE makes a re-fired hook
-// idempotent.
+// A row here means compaction actually happened. It carries no reconcile timestamp: verdicts are
+// persisted after this write, so `reconciled_at` is stamped separately once they exist.
+//
+// The upsert touches only what a re-record can restate. `injected_tokens` and `injected_at` belong
+// to the injector and are left alone.
 export function recordCycle(db: DatabaseSync, c: CycleRecord): void {
-  const reconciledAt = c.summary === null ? null : new Date().toISOString();
   db.prepare(
-    'INSERT OR REPLACE INTO cycles (session_id, cycle, trigger, summary, reconciled_at, compaction_ms) ' +
-      'VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(c.sessionId, c.cycle, c.trigger, c.summary, reconciledAt, c.compactionMs);
+    'INSERT INTO cycles (session_id, cycle, trigger, summary, compaction_ms, ' +
+      'pre_tokens, post_tokens, cumulative_dropped_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
+      'ON CONFLICT (session_id, cycle) DO UPDATE SET ' +
+      'trigger = excluded.trigger, summary = excluded.summary, compaction_ms = excluded.compaction_ms, ' +
+      'pre_tokens = excluded.pre_tokens, post_tokens = excluded.post_tokens, ' +
+      'cumulative_dropped_tokens = excluded.cumulative_dropped_tokens',
+  ).run(
+    c.sessionId, c.cycle, c.trigger, c.summary, c.compactionMs,
+    c.preTokens, c.postTokens, c.cumulativeDroppedTokens,
+  );
+}
+
+// The compactions PostCompact could not close, because the boundary record lands after that hook
+// exits. Deleted when the cycle is reconciled.
+export function markPending(db: DatabaseSync, sessionId: string, cycle: number): void {
+  db.prepare('INSERT OR REPLACE INTO pending (session_id, cycle, ts) VALUES (?, ?, ?)').run(
+    sessionId, cycle, new Date().toISOString(),
+  );
+}
+
+export function clearPending(db: DatabaseSync, sessionId: string, cycle: number): void {
+  db.prepare('DELETE FROM pending WHERE session_id = ? AND cycle = ?').run(sessionId, cycle);
+}
+
+export function hasPending(db: DatabaseSync, sessionId: string): boolean {
+  return db.prepare('SELECT 1 FROM pending WHERE session_id = ? LIMIT 1').get(sessionId) !== undefined;
+}
+
+export function pendingCount(db: DatabaseSync): number {
+  return Number(db.prepare('SELECT COUNT(*) AS n FROM pending').get()?.n ?? 0);
+}
+
+export function pendingCycles(db: DatabaseSync, sessionId: string): number[] {
+  return db
+    .prepare('SELECT cycle FROM pending WHERE session_id = ? ORDER BY cycle')
+    .all(sessionId)
+    .map((r) => Number(r.cycle));
+}
+
+// An archived cycle with no `cycles` row. A session's live cycle also has no row, so this is a
+// superset of the real backlog; `seb reconcile` narrows it by reading each transcript, where a
+// closed cycle has a boundary and a live one does not.
+const UNROWED =
+  'FROM anchors a WHERE NOT EXISTS ' +
+  '(SELECT 1 FROM cycles c WHERE c.session_id = a.session_id AND c.cycle = a.cycle)';
+
+export function strandedSessions(db: DatabaseSync): string[] {
+  return db
+    .prepare(`SELECT DISTINCT a.session_id ${UNROWED} ORDER BY a.session_id`)
+    .all()
+    .map((r) => String(r.session_id));
+}
+
+
+// Which of a session's cycles already have a row. The caller compares this against the boundaries
+// on disk to decide which cycle still needs reconciling.
+export function recordedCycles(db: DatabaseSync, sessionId: string): Set<number> {
+  const rows = db.prepare('SELECT cycle FROM cycles WHERE session_id = ?').all(sessionId);
+  return new Set(rows.map((r) => Number(r.cycle)));
+}
+
+// Stamped only once verdicts are in the database, which is what makes `reconciled_at` readable as
+// "this cycle's anchors have been judged".
+export function stampReconciled(db: DatabaseSync, sessionId: string, cycle: number): void {
+  db.prepare('UPDATE cycles SET reconciled_at = ? WHERE session_id = ? AND cycle = ?').run(
+    new Date().toISOString(), sessionId, cycle,
+  );
+}
+
+// Marks this cycle's index as delivered, so whichever hook injects it first is the only one that
+// does. SessionStart and UserPromptSubmit both run after a compaction.
+export function stampInjected(db: DatabaseSync, sessionId: string, cycle: number): void {
+  db.prepare('UPDATE cycles SET injected_at = ? WHERE session_id = ? AND cycle = ?').run(
+    new Date().toISOString(), sessionId, cycle,
+  );
 }
 
 // One verdict per anchor, in one transaction: a half-written cycle would feed drop-rate a
@@ -396,11 +480,14 @@ export interface CycleIndex {
   sessionId: string;
   cycle: number;
   reconciled: boolean;
+  // Whether this cycle's index has already been delivered, so a repeat prompt does not spend the
+  // budget twice.
+  injected: boolean;
   anchors: Anchor[];
   verdicts: Verdict[];
 }
 
-// What SessionStart injects: the anchors of the session's latest cycle. A reconciled cycle carries
+// What UserPromptSubmit injects: the anchors of the session's latest cycle. A reconciled cycle carries
 // a verdict per anchor; an unreconciled one carries the anchors alone, and the renderer labels
 // them unchecked rather than dropped.
 //
@@ -411,10 +498,16 @@ export interface CycleIndex {
 export function latestCycle(db: DatabaseSync, sessionId?: string | null): CycleIndex | null {
   if (sessionId === undefined || sessionId === null) return null;
   const row = db
-    .prepare('SELECT session_id, cycle, reconciled_at FROM cycles WHERE session_id = ? ORDER BY cycle DESC LIMIT 1')
+    .prepare(
+      'SELECT session_id, cycle, reconciled_at, injected_at FROM cycles WHERE session_id = ? ' +
+        'ORDER BY cycle DESC LIMIT 1',
+    )
     .get(sessionId);
   if (row === undefined) return null;
-  return loadCycle(db, row.session_id as string, Number(row.cycle), row.reconciled_at !== null);
+  return loadCycle(db, row.session_id as string, Number(row.cycle), {
+    reconciled: row.reconciled_at !== null,
+    injected: row.injected_at !== null,
+  });
 }
 
 // What `seb index` reports: the project's most recently reconciled cycle, whichever session it
@@ -424,17 +517,23 @@ export function latestCycle(db: DatabaseSync, sessionId?: string | null): CycleI
 export function newestReconciledCycle(db: DatabaseSync): CycleIndex | null {
   const row = db
     .prepare(
-      'SELECT session_id, cycle FROM cycles WHERE reconciled_at IS NOT NULL ' +
+      'SELECT session_id, cycle, injected_at FROM cycles WHERE reconciled_at IS NOT NULL ' +
         'ORDER BY reconciled_at DESC, cycle DESC LIMIT 1',
     )
     .get();
   if (row === undefined) return null;
-  return loadCycle(db, row.session_id as string, Number(row.cycle), true);
+  return loadCycle(db, row.session_id as string, Number(row.cycle), {
+    reconciled: true,
+    injected: row.injected_at !== null,
+  });
 }
 
 // A cycle holds either reconciled anchors or unreconciled ones, never a mixture: a verdict lands
 // on every anchor of a cycle or on none of them.
-function loadCycle(db: DatabaseSync, sessionId: string, cycle: number, reconciled: boolean): CycleIndex {
+function loadCycle(
+  db: DatabaseSync, sessionId: string, cycle: number, state: { reconciled: boolean; injected: boolean },
+): CycleIndex {
+  const { reconciled } = state;
   const rows = db
     .prepare(
       'SELECT id, uuid, session_id, cycle, turn, type, key, excerpt, verdict, score FROM anchors ' +
@@ -446,6 +545,7 @@ function loadCycle(db: DatabaseSync, sessionId: string, cycle: number, reconcile
     sessionId,
     cycle,
     reconciled,
+    injected: state.injected,
     anchors: rows.map(rowToAnchor),
     verdicts: reconciled ? rows.map(rowToVerdict) : [],
   };
@@ -501,9 +601,9 @@ export function currentCycle(db: DatabaseSync): number | null {
   return row?.cycle === null || row?.cycle === undefined ? null : Number(row.cycle);
 }
 
-// What SessionStart has spent on this cycle so far, summed over every run: the index on compaction
-// and the availability note on each resume. Written for every run, including the zero case: a cycle
-// that dropped nothing spent nothing, and NULL is reserved for a cycle SessionStart never reached.
+// What Sebastian has spent on this cycle so far, summed over every run: the index on the next
+// prompt and the notes SessionStart prints. Written for every run, including the zero case: a cycle
+// that dropped nothing spent nothing, and NULL is reserved for a cycle no injector ever reached.
 export function recordInjection(db: DatabaseSync, sessionId: string, cycle: number, tokens: number): void {
   db.prepare(
     'UPDATE cycles SET injected_tokens = COALESCE(injected_tokens, 0) + ? WHERE session_id = ? AND cycle = ?',
@@ -550,7 +650,7 @@ function round2(value: number): number {
 // means that hook has never executed. Reads no `msg` — the text is a diagnostic that can quote a
 // path or an error body, and nothing here needs it. Hooks are listed in the order they fire, not the
 // order they logged, so a missing one reads as a gap.
-const HOOK_ORDER = ['pre-compact', 'post-compact', 'session-start'];
+const HOOK_ORDER = ['pre-compact', 'post-compact', 'session-start', 'user-prompt-submit'];
 
 export function hookStats(db: DatabaseSync): HookStat[] {
   const rows = db
@@ -633,4 +733,69 @@ export function logEvent(
     msg,
     ms ?? null,
   );
+}
+
+export interface LogRow {
+  ts: string;
+  hook: string | null;
+  level: string;
+  msg: string;
+  ms: number | null;
+}
+
+export interface LogFilters {
+  hook?: string;
+  level?: string;
+  limit?: number;
+}
+
+// The newest rows that match, returned oldest first so a reader follows the loop in the order it
+// ran. The limit selects the page from the newest end; the row id is the insertion order, which
+// two rows written in the same millisecond would otherwise not preserve.
+export function recentLog(db: DatabaseSync, filters: LogFilters): LogRow[] {
+  const { where, params } = logWhere(filters);
+  const rows = db
+    .prepare(`SELECT ts, hook, level, msg, ms FROM log ${where} ORDER BY id DESC LIMIT ?`)
+    .all(...params, clampLimit(filters.limit));
+  return rows.reverse().map((r) => ({
+    ts: r.ts as string,
+    hook: (r.hook as string | null) ?? null,
+    level: r.level as string,
+    msg: r.msg as string,
+    ms: r.ms === null ? null : Number(r.ms),
+  }));
+}
+
+// How many rows match before the limit applies, so a page can say how much it left out.
+export function countLog(db: DatabaseSync, filters: LogFilters): number {
+  const { where, params } = logWhere(filters);
+  return Number(db.prepare(`SELECT COUNT(*) AS n FROM log ${where}`).get(...params)?.n);
+}
+
+function logWhere(filters: LogFilters): { where: string; params: SQLInputValue[] } {
+  const clauses: string[] = [];
+  const params: SQLInputValue[] = [];
+  if (filters.hook !== undefined) {
+    clauses.push('hook = ?');
+    params.push(filters.hook);
+  }
+  if (filters.level !== undefined) {
+    clauses.push('level = ?');
+    params.push(filters.level);
+  }
+  return { where: clauses.length === 0 ? '' : `WHERE ${clauses.join(' AND ')}`, params };
+}
+
+// Cycles that were judged but whose index never reached a model: `injected_at` is unset while at
+// least one anchor carries a verdict. This is the only in-product trace of a delivery hook the
+// platform stopped invoking, so it is counted rather than inferred.
+export function undeliveredCycles(db: DatabaseSync): number {
+  const row = db
+    .prepare(
+      'SELECT COUNT(*) AS n FROM cycles c WHERE c.injected_at IS NULL AND EXISTS ' +
+        '(SELECT 1 FROM anchors a WHERE a.session_id = c.session_id AND a.cycle = c.cycle ' +
+        'AND a.verdict IS NOT NULL)',
+    )
+    .get();
+  return Number(row?.n ?? 0);
 }

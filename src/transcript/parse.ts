@@ -20,6 +20,11 @@ export interface Boundary {
   cycle: number;
   trigger: string | null;
   durationMs: number | null;
+  // The platform's token accounting. `cumulativeDroppedTokens` is a session running total, not
+  // this cycle's loss.
+  preTokens: number | null;
+  postTokens: number | null;
+  cumulativeDroppedTokens: number | null;
   preservedUuids: Set<string>;
   restoredPaths: Set<string>;
 }
@@ -82,6 +87,9 @@ export function readBoundaries(events: TranscriptEvent[]): Boundary[] {
     cycle: event.cycle,
     trigger: str(obj(event.record?.compactMetadata)?.trigger),
     durationMs: finiteNumber(obj(event.record?.compactMetadata)?.durationMs),
+    preTokens: finiteNumber(obj(event.record?.compactMetadata)?.preTokens),
+    postTokens: finiteNumber(obj(event.record?.compactMetadata)?.postTokens),
+    cumulativeDroppedTokens: finiteNumber(obj(event.record?.compactMetadata)?.cumulativeDroppedTokens),
     preservedUuids: preservedUuids(event),
     restoredPaths: restoredPaths(events, event.turn),
   }));

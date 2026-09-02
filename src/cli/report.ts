@@ -23,7 +23,7 @@ import { usageWrap } from './args.js';
 //     most one per anchor type, one per (cmd, type, cycle) triple.
 //   - No telemetry row. This command reads the telemetry table, so recording its own visit would
 //     change the measurement and make two consecutive runs disagree.
-const SCHEMA = 2;
+const SCHEMA = 3;
 
 // One project, the one the working directory names.
 export function report(db: DatabaseSync, argv: string[]): string {
@@ -112,15 +112,21 @@ function totals(db: DatabaseSync): Record<string, number> {
 }
 
 // One row per compaction that happened, in the order it happened. `injectedTokens` sums every
-// SessionStart run for the cycle, index and resume notes alike. It is null when SessionStart never
-// ran for the cycle, and 0 when it ran and the summary had dropped nothing — the distinction is the
-// point of the column.
+// injection for the cycle, index and resume notes alike. It is null when no injector ever ran for
+// the cycle, and 0 when one ran and the summary had dropped nothing — the distinction is the point
+// of the column. It also includes the note SessionStart prints when the next compaction starts,
+// because this cycle is the newest one recorded at that moment.
+//
+// The token figures come from the platform, not from Sebastian. `preTokens` minus `postTokens` is
+// what this compaction destroyed, which is the denominator `injectedTokens` should be read against;
+// `cumulativeDroppedTokens` is a session running total and is not this cycle's loss.
 function cycles(db: DatabaseSync): Record<string, unknown>[] {
   const counted =
     'SELECT COUNT(*) FROM anchors a WHERE a.session_id = c.session_id AND a.cycle = c.cycle';
   const rows = db
     .prepare(
       'SELECT c.session_id, c.cycle, c.trigger, c.injected_tokens, c.compaction_ms, ' +
+        'c.pre_tokens, c.post_tokens, c.cumulative_dropped_tokens, ' +
         `(${counted}) AS anchors, ` +
         `(${counted} AND a.verdict IS NOT NULL) AS reconciled, ` +
         `(${counted} AND a.verdict = 'dropped') AS dropped ` +
@@ -136,6 +142,9 @@ function cycles(db: DatabaseSync): Record<string, unknown>[] {
     dropped: Number(r.dropped),
     injectedTokens: intOrNull(r.injected_tokens),
     compactionMs: intOrNull(r.compaction_ms),
+    preTokens: intOrNull(r.pre_tokens),
+    postTokens: intOrNull(r.post_tokens),
+    cumulativeDroppedTokens: intOrNull(r.cumulative_dropped_tokens),
   }));
 }
 

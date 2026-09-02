@@ -34,6 +34,15 @@
       "meanMs": 15,
       "maxMs": 15,
       "p95Ms": 15
+    },
+    {
+      "hook": "user-prompt-submit",
+      "runs": 2,
+      "warns": 0,
+      "lastRun": "2026-09-01T11:07:00.000Z",
+      "meanMs": 40,
+      "maxMs": 65,
+      "p95Ms": 65
     }
   ],
   "cycles": [
@@ -45,7 +54,10 @@
       "reconciled": 4,
       "dropped": 3,
       "injectedTokens": 118,
-      "compactionMs": 138204
+      "compactionMs": 138204,
+      "preTokens": 81600,
+      "postTokens": 10948,
+      "cumulativeDroppedTokens": 70652
     },
     {
       "cycle": 1,
@@ -55,7 +67,10 @@
       "reconciled": 0,
       "dropped": 0,
       "injectedTokens": 0,
-      "compactionMs": null
+      "compactionMs": null,
+      "preTokens": 20000,
+      "postTokens": 5000,
+      "cumulativeDroppedTokens": 85652
     },
     {
       "cycle": 0,
@@ -65,7 +80,10 @@
       "reconciled": 0,
       "dropped": 0,
       "injectedTokens": null,
-      "compactionMs": null
+      "compactionMs": null,
+      "preTokens": null,
+      "postTokens": null,
+      "cumulativeDroppedTokens": null
     }
   ],
   "byType": [

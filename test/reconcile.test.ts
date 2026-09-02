@@ -139,9 +139,10 @@ describe('renderForgottenIndex', () => {
   });
 
   // Round one holds one entry per type; the second error is the whole of round two. A budget that
-  // fits round one and nothing more must cut that error, not the only edit, read, or url.
+  // fits round one and nothing more must cut that error, not the only edit, read, or url. Round one
+  // renders at 549 characters, 138 tokens; the second error adds 80 characters for 158 tokens.
   it('a budget that fits one round cuts the second error before any other type\'s only entry', () => {
-    expect(renderForgottenIndex(verdicts, anchors, 170)).toBe(golden('index-truncated.txt'));
+    expect(renderForgottenIndex(verdicts, anchors, 150)).toBe(golden('index-truncated.txt'));
   });
 
   // The degraded path. Nothing here may read as a loss claim: no verdict exists, so no anchor is

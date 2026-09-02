@@ -5,7 +5,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { preCompact } from './hooks/preCompact.js';
 import { postCompact } from './hooks/postCompact.js';
 import { sessionStart } from './hooks/sessionStart.js';
-import { readStdin, runHook, type HookBody } from './hooks/runHook.js';
+import { userPromptSubmit } from './hooks/userPromptSubmit.js';
+import { readStdin, runHook, type Hook } from './hooks/runHook.js';
 import { dbPath, openDb, projectSlug, stampCommandMs } from './store/db.js';
 import { UsageError } from './cli/args.js';
 import { search } from './cli/search.js';
@@ -13,14 +14,20 @@ import { show } from './cli/show.js';
 import { indexCommand } from './cli/index.js';
 import { timeline } from './cli/timeline.js';
 import { status } from './cli/status.js';
+import { logCommand } from './cli/log.js';
 import { report, reportAll } from './cli/report.js';
+import { reconcileCommand } from './cli/reconcile.js';
 
-// The names hooks/run-hook.sh forwards, and the bodies they reach.
-const BODIES: Record<string, HookBody> = {
-  'pre-compact': preCompact,
-  'post-compact': postCompact,
-  'session-start': sessionStart,
-};
+// The names hooks/run-hook.sh forwards, the bodies they reach, and whether reaching one is allowed
+// to create this project's archive. Only the two compaction hooks are.
+export const HOOKS = {
+  'pre-compact': { body: preCompact, creates: true },
+  'post-compact': { body: postCompact, creates: true },
+  'session-start': { body: sessionStart, creates: false },
+  'user-prompt-submit': { body: userPromptSubmit, creates: false },
+} satisfies Record<string, Hook>;
+
+export type HookName = keyof typeof HOOKS;
 
 // A command reads the project database and returns the text to print. Commands run from a shell,
 // not from a hook, so they may exit non-zero — a mistyped flag or an id that is not archived is
@@ -33,7 +40,9 @@ const COMMANDS: Record<string, Command> = {
   index: indexCommand,
   timeline,
   status,
+  log: logCommand,
   report,
+  reconcile: reconcileCommand,
 };
 
 const USAGE = [
@@ -43,8 +52,10 @@ const USAGE = [
   '  seb index [--dropped|--all|--raw]',
   '  seb timeline [--cycle N]',
   '  seb status',
+  '  seb log [--hook <name>] [--level info|warn|error] [--limit N]',
   '  seb report [--all]',
-  '  seb hook <pre-compact|post-compact|session-start>',
+  '  seb reconcile',
+  '  seb hook <pre-compact|post-compact|session-start|user-prompt-submit>',
   '',
 ].join('\n');
 
@@ -69,12 +80,12 @@ function dispatchHook(name: string | undefined): number {
     process.stderr.write('sebastian: hook requires a name\n');
     return 0;
   }
-  const body = BODIES[name];
-  if (body === undefined) {
+  const hook = Object.hasOwn(HOOKS, name) ? HOOKS[name as HookName] : undefined;
+  if (hook === undefined) {
     process.stderr.write(`sebastian: unknown hook ${name}\n`);
     return 0;
   }
-  const out = runHook(name, body, readStdin());
+  const out = runHook(name, hook, readStdin());
   if (out !== '') process.stdout.write(out);
   return 0;
 }

@@ -35,11 +35,19 @@ CREATE TABLE IF NOT EXISTS anchors (
   PRIMARY KEY (session_id, id)
 );
 
--- `injected_tokens` is what every SessionStart run has spent on this cycle: the Forgotten Index on
--- compaction plus the availability note on each resume. Zero means the cycle dropped nothing and the
--- hook rendered nothing; NULL means SessionStart never ran for it, so the two cases stay
--- distinguishable. `compaction_ms` is the platform's own reported duration for
--- this compaction, which makes Sebastian's share of it arithmetic rather than an argument.
+-- `injected_tokens` is what injection has spent on this cycle: the Forgotten Index plus the
+-- availability note on each resume. Zero means the cycle dropped nothing and the renderer produced
+-- nothing; NULL means no injector ever reached it, so the two cases stay distinguishable.
+-- `injected_at` is the separate question of whether the index has been delivered, which is what
+-- stops SessionStart and UserPromptSubmit both spending the budget on the same cycle.
+--
+-- `reconciled_at` is set only once verdicts are in the database, never at the moment the row is
+-- written, so it can be read as "this cycle's anchors have been judged".
+--
+-- `compaction_ms` is the platform's own reported duration, which makes Sebastian's share of a
+-- compaction arithmetic rather than an argument. The three token columns are the platform's own
+-- accounting under its own names: this cycle's loss is `pre_tokens - post_tokens`, while
+-- `cumulative_dropped_tokens` is a session running total and is not this cycle's figure.
 CREATE TABLE IF NOT EXISTS cycles (
   session_id      TEXT NOT NULL,
   cycle           INTEGER NOT NULL,
@@ -48,7 +56,11 @@ CREATE TABLE IF NOT EXISTS cycles (
   reconciled_at   TEXT,
   summary         TEXT,
   injected_tokens INTEGER,
+  injected_at     TEXT,
   compaction_ms   INTEGER,
+  pre_tokens      INTEGER,
+  post_tokens     INTEGER,
+  cumulative_dropped_tokens INTEGER,
   PRIMARY KEY (session_id, cycle)
 );
 
@@ -66,6 +78,16 @@ CREATE TABLE IF NOT EXISTS telemetry (
   hits        INTEGER,
   cycle       INTEGER,                  -- attributed, not observed; see above
   ms          INTEGER                   -- whole-invocation duration, stamped after the command returns
+);
+
+-- A compaction PostCompact could not close, handed to whichever hook next runs with the boundary on
+-- disk. A row appears when PostCompact gives up and is deleted when the cycle is reconciled, so the
+-- table is empty whenever the loop is up to date.
+CREATE TABLE IF NOT EXISTS pending (
+  session_id TEXT NOT NULL,
+  cycle      INTEGER NOT NULL,
+  ts         TEXT NOT NULL,
+  PRIMARY KEY (session_id, cycle)
 );
 
 -- Fail-open diagnostics; hooks never print to stdout. `ms` is set on exactly one row per hook

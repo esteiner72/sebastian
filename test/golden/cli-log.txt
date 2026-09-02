@@ -1,0 +1,7 @@
+## Sebastian log — 6 of 6 entries
+2026-09-01 12:00:00.000  pre-compact         info  archived 12 messages and 4 anchors
+2026-09-01 12:00:00.400  pre-compact         info  complete  120ms
+2026-09-01 12:00:03.000  post-compact        warn  cycle 0 left pending; its boundary is not on disk yet
+2026-09-01 12:00:03.050  post-compact        info  complete  26ms
+2026-09-01 12:04:11.900  user-prompt-submit  info  closed cycle 0: 328 verdicts persisted
+2026-09-01 12:04:11.965  user-prompt-submit  info  complete  65ms

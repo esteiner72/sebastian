@@ -32,7 +32,7 @@ export interface QualityScore {
 export interface LatencyScore {
   preCompactMs: number;
   postCompactMs: number;
-  sessionStartMs: number;
+  injectMs: number;
   searchMs: number;
 }
 

@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { postCompact } from '../src/hooks/postCompact.js';
 import { preCompact } from '../src/hooks/preCompact.js';
 import { sessionStart } from '../src/hooks/sessionStart.js';
+import { userPromptSubmit } from '../src/hooks/userPromptSubmit.js';
 import { archiveDelta, openDbAt, searchAnchors } from '../src/store/db.js';
 import { extractAnchors, type Anchor } from '../src/transcript/anchors.js';
 import {
@@ -26,7 +27,7 @@ interface CycleRun {
   boundary: Boundary;
   preMs: number;
   postMs: number;
-  startMs: number;
+  injectMs: number;
   injected: string;
   retention: number | null;
 }
@@ -37,7 +38,7 @@ export interface CaseResult {
   score: CaseScore;
   injected: string;
   counts: MatchCounts;
-  samples: { preMs: number[]; startMs: number[]; searchMs: number[]; indexTokens: number[] };
+  samples: { preMs: number[]; injectMs: number[]; searchMs: number[]; indexTokens: number[] };
   violationPass: boolean | null;
   derivationDiff: { missing: string[]; extra: string[] } | null;
   hookCostPct: number | null;
@@ -118,9 +119,11 @@ interface CycleInput {
   postLines: string[];
 }
 
-// One compaction, driven through the real hook bodies with the transcript truncated to what each
-// hook would have seen: PreCompact the pre-boundary file, PostCompact the file through the
-// boundary and its summary, SessionStart the injection into the fresh window.
+// One compaction, driven through the real hook bodies in the order the platform runs them, with the
+// transcript truncated to what each hook would have seen. PreCompact reads the pre-boundary file.
+// SessionStart runs before the cycle exists. PostCompact marks it pending, because the platform
+// writes the boundary record only after the hook exits. UserPromptSubmit closes the cycle and
+// injects, which is the output scored below.
 function runCycle(input: CycleInput): CycleRun {
   const prePath = join(input.tmp, `pre-${String(input.boundary.cycle)}.jsonl`);
   const postPath = join(input.tmp, `post-${String(input.boundary.cycle)}.jsonl`);
@@ -129,14 +132,17 @@ function runCycle(input: CycleInput): CycleRun {
   const t0 = performance.now();
   preCompact(input.db, { transcript_path: prePath, session_id: input.sessionId });
   const t1 = performance.now();
+  sessionStart(input.db, { session_id: input.sessionId, source: 'compact' });
   postCompact(input.db, {
     transcript_path: postPath,
     session_id: input.sessionId,
-    compact_summary: input.summary ?? undefined,
     compaction_trigger: input.boundary.trigger ?? undefined,
   });
   const t2 = performance.now();
-  const stdout = sessionStart(input.db, { session_id: input.sessionId, source: 'compact' });
+  const stdout = userPromptSubmit(input.db, {
+    session_id: input.sessionId,
+    transcript_path: postPath,
+  });
   const t3 = performance.now();
   return {
     cycle: input.boundary.cycle,
@@ -144,7 +150,7 @@ function runCycle(input: CycleInput): CycleRun {
     boundary: input.boundary,
     preMs: t1 - t0,
     postMs: t2 - t1,
-    startMs: t3 - t2,
+    injectMs: t3 - t2,
     injected: injectedText(stdout),
     retention: identifierRetention(input.db, input.sessionId, input.boundary.cycle),
   };
@@ -184,7 +190,7 @@ function assemble(
       latency: {
         preCompactMs: round4(target.preMs),
         postCompactMs: round4(target.postMs),
-        sessionStartMs: round4(target.startMs),
+        injectMs: round4(target.injectMs),
         searchMs: round4(Math.max(...searchMs)),
       },
       size: { bytesPerCycle: 0, dbBytes: 0 },
@@ -192,7 +198,7 @@ function assemble(
     counts,
     samples: {
       preMs: cycles.map((cycle) => cycle.preMs),
-      startMs: cycles.map((cycle) => cycle.startMs),
+      injectMs: cycles.map((cycle) => cycle.injectMs),
       searchMs,
       indexTokens: cycles.map((cycle) => (cycle.injected === '' ? 0 : estimateTokens(cycle.injected))),
     },
@@ -356,7 +362,7 @@ function aggregateQuality(perCase: CaseResult[]): QualityScore {
 
 interface Budgets {
   preCompactMs: { p95: number; max: number };
-  sessionStartMs: { p95: number };
+  injectMs: { p95: number };
   searchMs: { p95: number };
   indexTokens: { max: number };
   bytesPerCycle: { max: number; maxFull: number };
@@ -373,14 +379,14 @@ function budgetFailures(
   full: boolean,
 ): string[] {
   const pre = perCase.flatMap((r) => r.samples.preMs);
-  const start = perCase.flatMap((r) => r.samples.startMs);
+  const inject = perCase.flatMap((r) => r.samples.injectMs);
   const search = [...perCase.flatMap((r) => r.samples.searchMs), ...profile.map((p) => p.searchMs)];
   const tokens = perCase.flatMap((r) => r.samples.indexTokens);
   const bytes = perCase.map((r) => r.score.size.bytesPerCycle);
   const failures: string[] = [];
   checkCeiling(failures, 'preCompactMs p95', p95(pre), budgets.preCompactMs.p95);
   checkCeiling(failures, 'preCompactMs max', max(pre), budgets.preCompactMs.max);
-  checkCeiling(failures, 'sessionStartMs p95', p95(start), budgets.sessionStartMs.p95);
+  checkCeiling(failures, 'injectMs p95', p95(inject), budgets.injectMs.p95);
   checkCeiling(failures, 'searchMs p95', p95(search), budgets.searchMs.p95);
   checkCeiling(failures, 'indexTokens max', max(tokens), budgets.indexTokens.max);
   const bytesCeiling = full ? budgets.bytesPerCycle.maxFull : budgets.bytesPerCycle.max;

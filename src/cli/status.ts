@@ -1,8 +1,8 @@
 import { parseArgs } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  archiveBytes, databaseFile, hookStats, logTelemetry, newestReconciledCycle, storeStats,
-  type HookStat,
+  archiveBytes, databaseFile, hookStats, logTelemetry, newestReconciledCycle, pendingCount,
+  storeStats, undeliveredCycles, type HookStat,
 } from '../store/db.js';
 import { computeSteering } from '../steer/adapt.js';
 import { capOutput, OUTPUT_TOKENS, plural } from './output.js';
@@ -24,12 +24,33 @@ export function status(db: DatabaseSync, argv: string[]): string {
     `${plural(stats.sessions, 'session')}, ${plural(stats.messages, 'message')}, ` +
       `${plural(stats.anchors, 'anchor')} (${stats.reconciled} reconciled)`,
     `${plural(stats.cycles, 'cycle')} recorded, ${stats.reconciledCycles} reconciled`,
+    ...healthLine(db),
     hooksLine(hookStats(db)),
     `Telemetry: ${stats.searches} searches, ${stats.shows} shows`,
     latestLine(cycle),
     '',
   ];
   return capOutput(`${lines.join('\n')}\n${computeSteering(db)}`, OUTPUT_TOKENS);
+}
+
+// Two conditions, each printed only while it holds, so neither can become permanent furniture.
+function healthLine(db: DatabaseSync): string[] {
+  return [...pendingLine(db), ...undeliveredLine(db)];
+}
+
+// A compaction waiting to be closed. The `pending` table empties as soon as one is.
+function pendingLine(db: DatabaseSync): string[] {
+  const waiting = pendingCount(db);
+  if (waiting === 0) return [];
+  return [`${plural(waiting, 'compaction')} not yet closed — run \`seb reconcile\` or compact again.`];
+}
+
+// A cycle that was judged but never delivered. The hooks that deliver run only when the platform
+// invokes them, and a hook it stops invoking leaves no other trace than this.
+function undeliveredLine(db: DatabaseSync): string[] {
+  const n = undeliveredCycles(db);
+  if (n === 0) return [];
+  return [`${plural(n, 'reconciled cycle')} never reached a model — run \`seb index\` to read the newest.`];
 }
 
 function latestLine(cycle: ReturnType<typeof newestReconciledCycle>): string {
@@ -50,7 +71,7 @@ function hooksLine(hooks: HookStat[]): string {
   const parts = hooks.map((h) => `${h.hook} ${plural(h.runs, 'run')}`);
   const warns = hooks.reduce((n, h) => n + h.warns, 0);
   const last = hooks.reduce<string | null>((newest, h) => later(newest, h.lastRun), null);
-  const suffix = warns === 0 ? '' : ` (${plural(warns, 'warning')} — \`seb report\` has the detail)`;
+  const suffix = warns === 0 ? '' : ` (${plural(warns, 'warning')} — \`seb log\` has the detail)`;
   return `Hooks: ${parts.join(', ')}; last ran ${last ?? 'never'}${suffix}`;
 }
 

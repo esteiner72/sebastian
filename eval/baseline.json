@@ -1,110 +1,110 @@
 {
-  "generatedAt": "2026-09-01T19:48:14.401Z",
-  "commit": "6d4deaba4ad260231ccfe9d9b4cf8e8395b89672",
+  "generatedAt": "2026-09-02T04:44:10.440Z",
+  "commit": "0ae4a6ea07d1f63305273c03a02153ba94708211",
   "aggregate": {
     "recall": 0.9565,
     "precision": 0.6471,
-    "indexTokens": 118,
-    "recallPerKToken": 8.1059,
+    "indexTokens": 106,
+    "recallPerKToken": 9.0236,
     "steeringLift": 0.1
   },
   "perCase": {
     "answer-reask": {
       "recall": 1,
       "precision": 1,
-      "indexTokens": 115,
-      "recallPerKToken": 8.6957,
+      "indexTokens": 109,
+      "recallPerKToken": 9.1743,
       "steeringLift": null
     },
     "artifact-reacquire": {
       "recall": 1,
       "precision": 0.5,
-      "indexTokens": 109,
-      "recallPerKToken": 9.1743,
+      "indexTokens": 99,
+      "recallPerKToken": 10.101,
       "steeringLift": null
     },
     "basename-kept": {
       "recall": 1,
       "precision": 0.6667,
-      "indexTokens": 155,
-      "recallPerKToken": 6.4516,
+      "indexTokens": 136,
+      "recallPerKToken": 7.3529,
       "steeringLift": null
     },
     "bash-reread": {
       "recall": 1,
       "precision": 1,
-      "indexTokens": 52,
-      "recallPerKToken": 19.2308,
+      "indexTokens": 50,
+      "recallPerKToken": 20,
       "steeringLift": null
     },
     "digest-overflow": {
       "recall": 1,
       "precision": 0.8571,
-      "indexTokens": 173,
-      "recallPerKToken": 5.7803,
+      "indexTokens": 147,
+      "recallPerKToken": 6.8027,
       "steeringLift": null
     },
     "first-of-two": {
-      "recall": 1,
-      "precision": 0.5,
-      "indexTokens": 106,
-      "recallPerKToken": 9.434,
-      "steeringLift": null
-    },
-    "instruction-dropped": {
       "recall": 1,
       "precision": 0.5,
       "indexTokens": 96,
       "recallPerKToken": 10.4167,
       "steeringLift": null
     },
+    "instruction-dropped": {
+      "recall": 1,
+      "precision": 0.5,
+      "indexTokens": 86,
+      "recallPerKToken": 11.6279,
+      "steeringLift": null
+    },
     "mention-not-action": {
       "recall": 1,
       "precision": 0.3333,
-      "indexTokens": 139,
-      "recallPerKToken": 7.1942,
+      "indexTokens": 121,
+      "recallPerKToken": 8.2645,
       "steeringLift": null
     },
     "nearmiss-reask": {
       "recall": 1,
       "precision": 0.5,
-      "indexTokens": 137,
-      "recallPerKToken": 7.2993,
+      "indexTokens": 127,
+      "recallPerKToken": 7.874,
       "steeringLift": null
     },
     "platform-restored": {
       "recall": 1,
       "precision": 0.5,
-      "indexTokens": 106,
-      "recallPerKToken": 9.434,
+      "indexTokens": 96,
+      "recallPerKToken": 10.4167,
       "steeringLift": null
     },
     "preserved-message": {
       "recall": 1,
       "precision": 0.5,
-      "indexTokens": 107,
-      "recallPerKToken": 9.3458,
+      "indexTokens": 97,
+      "recallPerKToken": 10.3093,
       "steeringLift": null
     },
     "topical-kept": {
       "recall": 0.5,
       "precision": 0.5,
-      "indexTokens": 128,
-      "recallPerKToken": 3.9063,
+      "indexTokens": 114,
+      "recallPerKToken": 4.386,
       "steeringLift": null
     },
     "two-cycle": {
       "recall": 1,
       "precision": 1,
-      "indexTokens": 79,
-      "recallPerKToken": 12.6582,
+      "indexTokens": 73,
+      "recallPerKToken": 13.6986,
       "steeringLift": 0.1
     },
     "unmarked-reask": {
       "recall": 1,
       "precision": 0.6667,
-      "indexTokens": 145,
-      "recallPerKToken": 6.8966,
+      "indexTokens": 135,
+      "recallPerKToken": 7.4074,
       "steeringLift": null
     }
   }

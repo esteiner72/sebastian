@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  archiveDelta, logEvent, openDb, openDbAt, persistVerdicts, projectSlug, recordCycle,
-  type ArchivedMessage,
+  archiveDelta, logEvent, markPending, openDb, openDbAt, persistVerdicts, projectSlug, recordCycle,
+  stampReconciled, type ArchivedMessage,
 } from '../src/store/db.js';
 import { extractAnchors } from '../src/transcript/anchors.js';
 import { parseTranscript } from '../src/transcript/parse.js';
@@ -16,7 +16,9 @@ import { fitWindow, show } from '../src/cli/show.js';
 import { indexCommand } from '../src/cli/index.js';
 import { timeline } from '../src/cli/timeline.js';
 import { status } from '../src/cli/status.js';
+import { logCommand } from '../src/cli/log.js';
 import { report } from '../src/cli/report.js';
+import { reconcileCommand } from '../src/cli/reconcile.js';
 import { main } from '../src/index.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/seven-types.jsonl', import.meta.url));
@@ -82,7 +84,11 @@ function reconcileFixture(db: DatabaseSync): void {
     compactionMs: null,
     trigger: 'manual',
     summary: 'The sync retry loop was repaired.',
+    preTokens: null,
+    postTokens: null,
+    cumulativeDroppedTokens: null,
   });
+  stampReconciled(db, 'fix-seven', 0);
 }
 
 // Goldens hand-written from the Retrieval surface section, against a real temporary database. The
@@ -261,7 +267,7 @@ describe('cli retrieval', () => {
     expect(entry?.data.totals.dbBytes).toBeGreaterThan(0);
     delete entry?.data.totals.dbBytes;
 
-    expect(parsed.schema).toBe(2);
+    expect(parsed.schema).toBe(3);
     expect(parsed.projects).toHaveLength(1);
     expect(entry?.data).toEqual(JSON.parse(golden('report-data.json')));
     expect(entry?.project).toMatch(/^[0-9a-f]{12}$/);
@@ -272,7 +278,17 @@ describe('cli retrieval', () => {
   // A silently dead install is the failure the eval harness cannot see: it drives the hook bodies
   // directly, so it can never observe hooks that were never wired to fire. These two readings are
   // what a field tester checks after installing.
-  it('distinguishes an install where no hook has ever fired from one where all three have', () => {
+  // The eval harness runs the hook bodies and scores what they inject; it never reads the log table
+  // back. A listing that dropped a column, invented a duration for an untimed row, or ran newest
+  // first would pass every eval and misreport every compaction a tester asked about.
+  it('prints every log row with its hook, level, message and duration, oldest first, so a reader follows the loop in the order it ran', () => {
+    const db = tempDb('seb-cli-log-');
+    seedLog(db);
+    expect(logCommand(db, [])).toBe(golden('cli-log.txt'));
+    db.close();
+  });
+
+  it('distinguishes an install where no hook has ever fired from one where several have', () => {
     const empty = tempDb('seb-cli-hooks-none-');
     expect(status(empty, [])).toContain('Hooks: none has run yet.');
     empty.close();
@@ -288,7 +304,7 @@ describe('cli retrieval', () => {
     const text = status(db, []);
 
     expect(text).toContain('Hooks: pre-compact 2 runs, post-compact 1 run, session-start 1 run;');
-    expect(text).toContain('(1 warning — `seb report` has the detail)');
+    expect(text).toContain('(1 warning — `seb log` has the detail)');
     db.close();
   });
 });
@@ -334,11 +350,57 @@ describe('cli process edge', () => {
   });
 });
 
+// The eval harness never runs the CLI and never removes a transcript. `HOME` points at an empty
+// directory so no session here has one; a `pending` row with no transcript must close, and a
+// finished session's live cycle must not be reported as anything.
+describe('seb reconcile without transcripts', () => {
+  const HOME = tempDir('seb-reconcile-home-');
+  const REAL_HOME = process.env.HOME;
+
+  beforeAll(() => {
+    process.env.HOME = HOME;
+  });
+
+  afterAll(() => {
+    process.env.HOME = REAL_HOME;
+  });
+
+  it('closes a pending cycle whose transcript is gone and says nothing about a finished session\'s live cycle', () => {
+    const db = tempDb('seb-reconcile-gone-');
+    seedForReconcile(db);
+
+    expect(reconcileCommand(db, [])).toBe(golden('cli-reconcile-gone.txt'));
+
+    expect(db.prepare('SELECT session_id, cycle, reconciled_at FROM cycles').all()).toEqual([
+      { session_id: 'fix-gone-session', cycle: 1, reconciled_at: null },
+    ]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM pending').get()?.n).toBe(0);
+    db.close();
+  });
+});
+
 const CANARY = 'CANARY-SEB-LEAK';
+
+// Two sessions with archived anchors and no `cycles` row. `fix-gone-session` left a `pending` row
+// for cycle 1, standing for a compaction PostCompact handed on before the session died.
+// `fix-done-session` holds only its live cycle 0, the shape every finished session takes.
+function seedForReconcile(db: DatabaseSync): void {
+  const message = db.prepare(
+    'INSERT INTO messages (uuid, session_id, cycle, turn, ts, role, record) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  const anchor = db.prepare(
+    'INSERT INTO anchors (session_id, id, uuid, cycle, turn, type, key, excerpt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  for (const [uuid, session, cycle] of [['g1', 'fix-gone-session', 1], ['d1', 'fix-done-session', 0]] as const) {
+    message.run(uuid, session, cycle, 1, '2026-09-01T10:00:00.000Z', 'user', `{"t":"${CANARY}"}`);
+    anchor.run(session, 't1e1', uuid, cycle, 1, 'error', CANARY, CANARY);
+  }
+  markPending(db, 'fix-gone-session', 1);
+}
 
 // One archive with every shape the report reads: two sessions, a cycle whose SessionStart ran and
 // spent tokens, one whose render was empty, one SessionStart never reached, both verdict bands, an
-// unreconciled anchor, three hooks with one warning, and retrievals with and without hits. Written
+// unreconciled anchor, four hooks with one warning, and retrievals with and without hits. Written
 // as direct SQL at fixed timestamps so the document is byte-stable, and every free-text column
 // carries the canary.
 function seedForReport(db: DatabaseSync): void {
@@ -368,17 +430,22 @@ function seedForReport(db: DatabaseSync): void {
     anchor.run(session, id, uuid, cycle, turn, type, CANARY, CANARY, verdict, score);
   }
 
+  // s-beta reports no token accounting, standing for a boundary written by a build that did not
+  // publish it. Absence has to survive as null: a zero would read as a compaction that dropped
+  // nothing. Note the cumulative figure rises across s-alpha's two cycles while each cycle's own
+  // loss is its own pre minus post, which is why both sides are stored.
   const cycleRows = [
-    ['s-alpha', 0, 'auto', '2026-09-01T11:00:00.000Z', 118, 138204],
-    ['s-alpha', 1, 'manual', '2026-09-01T11:30:00.000Z', 0, null],
-    ['s-beta', 0, 'auto', null, null, null],
+    ['s-alpha', 0, 'auto', '2026-09-01T11:00:00.000Z', 118, 138204, 81600, 10948, 70652],
+    ['s-alpha', 1, 'manual', '2026-09-01T11:30:00.000Z', 0, null, 20000, 5000, 85652],
+    ['s-beta', 0, 'auto', null, null, null, null, null, null],
   ] as const;
   const cycle = db.prepare(
-    'INSERT INTO cycles (session_id, cycle, trigger, reconciled_at, summary, injected_tokens, compaction_ms) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO cycles (session_id, cycle, trigger, reconciled_at, summary, injected_tokens, ' +
+      'compaction_ms, pre_tokens, post_tokens, cumulative_dropped_tokens) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
-  for (const [session, n, trigger, reconciledAt, tokens, compactionMs] of cycleRows) {
-    cycle.run(session, n, trigger, reconciledAt, CANARY, tokens, compactionMs);
+  for (const [session, n, trigger, reconciledAt, tokens, compactionMs, pre, post, dropped] of cycleRows) {
+    cycle.run(session, n, trigger, reconciledAt, CANARY, tokens, compactionMs, pre, post, dropped);
   }
 
   // The status row carries no duration: a command whose invocation was never stamped still counts,
@@ -403,7 +470,25 @@ function seedForReport(db: DatabaseSync): void {
     ['pre-compact', 'warn', '2026-09-01T12:00:00.000Z', null],
     ['post-compact', 'info', '2026-09-01T11:05:00.000Z', 90],
     ['session-start', 'info', '2026-09-01T11:06:00.000Z', 15],
+    ['user-prompt-submit', 'info', '2026-09-01T11:06:30.000Z', 15],
+    ['user-prompt-submit', 'info', '2026-09-01T11:07:00.000Z', 65],
   ] as const;
   const event = db.prepare('INSERT INTO log (ts, hook, level, msg, ms) VALUES (?, ?, ?, ?, ?)');
   for (const [hook, level, ts, ms] of events) event.run(ts, hook, level, CANARY, ms);
+}
+
+// One compaction as the loop records it: PreCompact archives, PostCompact hands the cycle on, and
+// UserPromptSubmit closes it on the next message. The warn row and the first row of each hook carry
+// no duration, because only runHook's completion row is timed.
+function seedLog(db: DatabaseSync): void {
+  const rows: [string, string, string, string, number | null][] = [
+    ['2026-09-01T12:00:00.000Z', 'pre-compact', 'info', 'archived 12 messages and 4 anchors', null],
+    ['2026-09-01T12:00:00.400Z', 'pre-compact', 'info', 'complete', 120],
+    ['2026-09-01T12:00:03.000Z', 'post-compact', 'warn', 'cycle 0 left pending; its boundary is not on disk yet', null],
+    ['2026-09-01T12:00:03.050Z', 'post-compact', 'info', 'complete', 26],
+    ['2026-09-01T12:04:11.900Z', 'user-prompt-submit', 'info', 'closed cycle 0: 328 verdicts persisted', null],
+    ['2026-09-01T12:04:11.965Z', 'user-prompt-submit', 'info', 'complete', 65],
+  ];
+  const insert = db.prepare('INSERT INTO log (ts, hook, level, msg, ms) VALUES (?, ?, ?, ?, ?)');
+  for (const row of rows) insert.run(...row);
 }
