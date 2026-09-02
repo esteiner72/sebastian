@@ -1,4 +1,4 @@
-import type { AnchorType } from '../transcript/anchors.js';
+import { ANCHOR_TYPES, type AnchorType } from '../transcript/anchors.js';
 
 // A condition the caller can fix: an unknown flag, an unparsable id, an anchor that is not in the
 // archive. The CLI exits 1 and prints one line on stderr for these. Fail-open is a hook contract
@@ -34,11 +34,9 @@ export function turnRange(value: string | undefined): { from: number; to: number
   return { from, to };
 }
 
-const TYPES: AnchorType[] = ['error', 'answer', 'edit', 'user', 'cmd', 'read', 'url'];
-
 export function anchorType(value: string | undefined): AnchorType | undefined {
   if (value === undefined) return undefined;
-  const type = TYPES.find((t) => t === value);
-  if (type === undefined) throw new UsageError(`--type takes one of ${TYPES.join('|')}, got "${value}"`);
+  const type = ANCHOR_TYPES.find((t) => t === value);
+  if (type === undefined) throw new UsageError(`--type takes one of ${ANCHOR_TYPES.join('|')}, got "${value}"`);
   return type;
 }

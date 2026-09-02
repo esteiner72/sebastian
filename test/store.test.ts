@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { extractAnchors } from '../src/transcript/anchors.js';
 import { parseTranscript } from '../src/transcript/parse.js';
 import {
-  archiveDelta, getMessage, logTelemetry, openDbAt, recordCycle, recordInjection, searchAnchors,
+  archiveDelta, logTelemetry, messagesInRange, openDbAt, recordCycle, recordInjection, searchAnchors,
 } from '../src/store/db.js';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -28,7 +28,7 @@ function freshArchive() {
 // pin the byte-level and row-level contracts it never asserts.
 
 describe('store round-trip', () => {
-  it('returns the archived JSONL line byte-identical after archive → search → uuid lookup, so retrieval never re-serializes a record', () => {
+  it('returns the archived JSONL line byte-identical after archive → search → position lookup, so retrieval never re-serializes a record', () => {
     const { db, events, anchors, counts } = freshArchive();
     expect(counts).toEqual({ messages: events.length, anchors: anchors.length });
 
@@ -39,8 +39,9 @@ describe('store round-trip', () => {
     ]);
 
     const lines = readFileSync(FIXTURE, 'utf8').split('\n').filter((l) => l.trim() !== '');
-    expect(getMessage(db, 'u7')?.raw).toBe(lines[7]);
-    expect(getMessage(db, 'no-such-uuid')).toBeNull();
+    const hit = hits[0]!;
+    expect(messagesInRange(db, hit.sessionId, hit.turn, hit.turn)[0]?.raw).toBe(lines[7]);
+    expect(messagesInRange(db, hit.sessionId, 10_000, 10_000)).toEqual([]);
     db.close();
   });
 

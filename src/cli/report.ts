@@ -49,11 +49,7 @@ function entryFor(path: string): Record<string, unknown> {
   } catch (err) {
     return { project: hash(basename(dirname(path)), 12), error: String(err) };
   } finally {
-    try {
-      db?.close();
-    } catch {
-      // A close failure cannot invalidate an entry that was already built.
-    }
+    db?.close();
   }
 }
 

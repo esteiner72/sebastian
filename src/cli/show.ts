@@ -3,12 +3,12 @@ import type { DatabaseSync } from 'node:sqlite';
 import {
   logTelemetry, lookupAnchors, messagesInRange, sessionsAtTurn, type ArchivedMessage,
 } from '../store/db.js';
-import type { Anchor } from '../transcript/anchors.js';
+import { TYPE_LETTERS, type Anchor } from '../transcript/anchors.js';
 import { TOKEN_CHARS } from '../transcript/text.js';
 import { integer, UsageError, usageWrap } from './args.js';
 import { displayId, OUTPUT_TOKENS, plural } from './output.js';
 
-const ANCHOR_ID = /^t\d+[eaducrw]\d+$/;
+const ANCHOR_ID = new RegExp(`^t\\d+[${Object.values(TYPE_LETTERS).join('')}]\\d+$`);
 const CYCLE_TURN = /^(\d+):(\d+)$/;
 
 interface Spot {

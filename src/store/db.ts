@@ -2,7 +2,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { toEvent, type TranscriptEvent } from '../transcript/parse.js';
+import type { TranscriptEvent } from '../transcript/parse.js';
 import type { Anchor, AnchorType } from '../transcript/anchors.js';
 import type { Verdict } from '../reconcile/reconcile.js';
 
@@ -62,7 +62,7 @@ const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
   ['cycles', 'cumulative_dropped_tokens', 'INTEGER'],
 ];
 
-export function migrateColumns(db: DatabaseSync): void {
+function migrateColumns(db: DatabaseSync): void {
   const present = db.prepare('SELECT 1 FROM pragma_table_info(?) WHERE name = ?');
   for (const [table, column, type] of ADDED_COLUMNS) {
     if (present.get(table, column) === undefined) {
@@ -216,14 +216,6 @@ function rowToAnchor(row: Record<string, unknown>): Anchor {
     key: row.key as string,
     excerpt: row.excerpt as string,
   };
-}
-
-// Re-hydrates the archived line through the same parser that produced it, with the stored turn
-// and cycle, so a retrieved event is indistinguishable from one read off the live transcript.
-export function getMessage(db: DatabaseSync, uuid: string): TranscriptEvent | null {
-  const row = db.prepare('SELECT cycle, turn, record FROM messages WHERE uuid = ?').get(uuid);
-  if (row === undefined) return null;
-  return toEvent(Number(row.turn), Number(row.cycle), row.record as string);
 }
 
 // `seb show` resolves a session-local id against the whole project, because the display form the
@@ -432,7 +424,6 @@ export function strandedSessions(db: DatabaseSync): string[] {
     .map((r) => String(r.session_id));
 }
 
-
 // Which of a session's cycles already have a row. The caller compares this against the boundaries
 // on disk to decide which cycle still needs reconciling.
 export function recordedCycles(db: DatabaseSync, sessionId: string): Set<number> {
@@ -596,7 +587,7 @@ export function logTelemetry(db: DatabaseSync, t: TelemetryEntry): void {
 // The newest cycle recorded anywhere in the project, which is the one a retrieval most likely
 // follows. Null before the first compaction, when a command can only be reaching the archive
 // directly.
-export function currentCycle(db: DatabaseSync): number | null {
+function currentCycle(db: DatabaseSync): number | null {
   const row = db.prepare('SELECT MAX(cycle) AS cycle FROM cycles').get();
   return row?.cycle === null || row?.cycle === undefined ? null : Number(row.cycle);
 }
@@ -630,7 +621,7 @@ export interface Timing {
 // function, and the population is at most a few thousand rows, so the sort happens here. p95 takes
 // the value at the 95th percentile position rather than interpolating: with a handful of samples an
 // interpolated figure invents precision the data does not have.
-export function summarize(values: number[]): Timing {
+function summarize(values: number[]): Timing {
   if (values.length === 0) return { meanMs: null, maxMs: null, p95Ms: null };
   const sorted = [...values].sort((a, b) => a - b);
   const total = sorted.reduce((sum, v) => sum + v, 0);

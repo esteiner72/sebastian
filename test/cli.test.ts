@@ -326,14 +326,14 @@ describe('cli process edge', () => {
     process.chdir(REAL_CWD);
   });
 
-  it('exits 0 with a note when the project has no archive yet, and 1 only for a mistake the caller can correct', async () => {
+  it('exits 0 with a note when the project has no archive yet, and 1 only for a mistake the caller can correct', () => {
     const cwd = tempDir('seb-cli-cwd-');
     process.chdir(cwd);
 
     // Nothing has compacted here: an empty result would read as "nothing was ever archived".
-    expect(await main(['status'])).toBe(0);
-    expect(await main(['frobnicate'])).toBe(1);
-    expect(await main([])).toBe(1);
+    expect(main(['status'])).toBe(0);
+    expect(main(['frobnicate'])).toBe(1);
+    expect(main([])).toBe(1);
 
     // macOS resolves the temporary directory through a symlink, so the slug has to come from the
     // working directory as the CLI itself reads it, not from the path mkdtemp returned.
@@ -341,12 +341,12 @@ describe('cli process edge', () => {
     archiveFixture(db, FIXTURE);
     db.close();
 
-    expect(await main(['timeline', '--cycle', '0'])).toBe(0);
-    expect(await main(['search'])).toBe(1);
-    expect(await main(['search', 'retry', '--type', 'nonsense'])).toBe(1);
-    expect(await main(['show', 't99e1'])).toBe(1);
-    expect(await main(['show', 'not-an-id'])).toBe(1);
-    expect(await main(['index', '--nope'])).toBe(1);
+    expect(main(['timeline', '--cycle', '0'])).toBe(0);
+    expect(main(['search'])).toBe(1);
+    expect(main(['search', 'retry', '--type', 'nonsense'])).toBe(1);
+    expect(main(['show', 't99e1'])).toBe(1);
+    expect(main(['show', 'not-an-id'])).toBe(1);
+    expect(main(['index', '--nope'])).toBe(1);
   });
 });
 
@@ -486,7 +486,7 @@ function seedLog(db: DatabaseSync): void {
     ['2026-09-01T12:00:00.400Z', 'pre-compact', 'info', 'complete', 120],
     ['2026-09-01T12:00:03.000Z', 'post-compact', 'warn', 'cycle 0 left pending; its boundary is not on disk yet', null],
     ['2026-09-01T12:00:03.050Z', 'post-compact', 'info', 'complete', 26],
-    ['2026-09-01T12:04:11.900Z', 'user-prompt-submit', 'info', 'closed cycle 0: 328 verdicts persisted', null],
+    ['2026-09-01T12:04:11.900Z', 'user-prompt-submit', 'info', 'recovered cycle 0: 328 verdicts persisted', null],
     ['2026-09-01T12:04:11.965Z', 'user-prompt-submit', 'info', 'complete', 65],
   ];
   const insert = db.prepare('INSERT INTO log (ts, hook, level, msg, ms) VALUES (?, ?, ?, ?, ?)');

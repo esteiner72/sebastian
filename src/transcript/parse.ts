@@ -77,22 +77,31 @@ export function isCompactSummary(event: TranscriptEvent): boolean {
   return event.type === 'user' && event.record?.isCompactSummary === true;
 }
 
+// The session id of the first record that carries one. Hook payloads can arrive without one.
+export function transcriptSession(events: TranscriptEvent[]): string | null {
+  for (const event of events) if (event.sessionId !== null) return event.sessionId;
+  return null;
+}
+
 // Boundaries carry two exact-truth sets: the messages preserved verbatim in context
 // (compactMetadata.preservedMessages.allUuids) and the files the platform restored right after
 // the boundary. restoredPaths has two consumers — reconciliation Stage 0b and the eval harness's
 // deriveNeeded — so it must stay the complete restored set, never a narrowed one.
 export function readBoundaries(events: TranscriptEvent[]): Boundary[] {
-  return events.filter(isBoundary).map((event) => ({
-    uuid: event.uuid ?? '',
-    cycle: event.cycle,
-    trigger: str(obj(event.record?.compactMetadata)?.trigger),
-    durationMs: finiteNumber(obj(event.record?.compactMetadata)?.durationMs),
-    preTokens: finiteNumber(obj(event.record?.compactMetadata)?.preTokens),
-    postTokens: finiteNumber(obj(event.record?.compactMetadata)?.postTokens),
-    cumulativeDroppedTokens: finiteNumber(obj(event.record?.compactMetadata)?.cumulativeDroppedTokens),
-    preservedUuids: preservedUuids(event),
-    restoredPaths: restoredPaths(events, event.turn),
-  }));
+  return events.filter(isBoundary).map((event) => {
+    const meta = obj(event.record?.compactMetadata);
+    return {
+      uuid: event.uuid ?? '',
+      cycle: event.cycle,
+      trigger: str(meta?.trigger),
+      durationMs: finiteNumber(meta?.durationMs),
+      preTokens: finiteNumber(meta?.preTokens),
+      postTokens: finiteNumber(meta?.postTokens),
+      cumulativeDroppedTokens: finiteNumber(meta?.cumulativeDroppedTokens),
+      preservedUuids: preservedUuids(meta),
+      restoredPaths: restoredPaths(events, event.turn),
+    };
+  });
 }
 
 // The platform reports how long it spent compacting. An older binary may omit it, so absence is a
@@ -101,8 +110,8 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-function preservedUuids(event: TranscriptEvent): Set<string> {
-  const preserved = obj(obj(event.record?.compactMetadata)?.preservedMessages);
+function preservedUuids(meta: Record<string, unknown> | null): Set<string> {
+  const preserved = obj(meta?.preservedMessages);
   const all = preserved?.allUuids;
   if (!Array.isArray(all)) return new Set();
   return new Set(all.filter((u): u is string => typeof u === 'string'));

@@ -103,7 +103,6 @@ function stripPunct(text: string): string {
   return text.replaceAll(/^[^a-z0-9/]+|[^a-z0-9/]+$/g, '');
 }
 
-
 function sentenceTokenSets(summary: string): Set<string>[] {
   return summary
     .split(/(?<=[.!?])\s+|\n+/)

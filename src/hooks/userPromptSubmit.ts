@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { hasPending, latestCycle, logEvent } from '../store/db.js';
-import { catchUp } from '../reconcile/cycle.js';
+import { logCatchUp } from '../reconcile/cycle.js';
 import { deliverIndex } from '../reconcile/inject.js';
 import { parseTranscript } from '../transcript/parse.js';
 import { str } from '../transcript/text.js';
@@ -29,8 +29,5 @@ function close(db: DatabaseSync, payload: Payload, sessionId: string): void {
     logEvent(db, 'user-prompt-submit', 'warn', 'a cycle is pending but its transcript is gone');
     return;
   }
-  for (const r of catchUp(db, parseTranscript(path), sessionId)) {
-    const detail = r.summarized ? `${r.verdicts} verdicts persisted` : 'no summary found; verdicts left NULL';
-    logEvent(db, 'user-prompt-submit', r.summarized ? 'info' : 'warn', `closed cycle ${r.cycle}: ${detail}`);
-  }
+  logCatchUp(db, 'user-prompt-submit', parseTranscript(path), sessionId);
 }

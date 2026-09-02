@@ -830,10 +830,10 @@ describe('fail-open', () => {
   // `main` is the process edge, and the exit code is the whole fail-open contract as Claude Code
   // sees it: every hook path exits 0 whatever happened, and only a command Sebastian does not
   // recognize at all may exit non-zero.
-  it('exits 0 from every hook path, including an unknown or missing hook name, and 1 only for an unrecognized command', async () => {
-    expect(await main(['hook', 'no-such-hook'])).toBe(0);
-    expect(await main(['hook'])).toBe(0);
-    expect(await main(['frobnicate'])).toBe(1);
-    expect(await main([])).toBe(1);
+  it('exits 0 from every hook path, including an unknown or missing hook name, and 1 only for an unrecognized command', () => {
+    expect(main(['hook', 'no-such-hook'])).toBe(0);
+    expect(main(['hook'])).toBe(0);
+    expect(main(['frobnicate'])).toBe(1);
+    expect(main([])).toBe(1);
   });
 });

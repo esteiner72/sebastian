@@ -1,9 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { archiveDelta, logEvent } from '../store/db.js';
-import { catchUp } from '../reconcile/cycle.js';
+import { logCatchUp } from '../reconcile/cycle.js';
 import { computeSteering } from '../steer/adapt.js';
 import { extractAnchors } from '../transcript/anchors.js';
-import { parseTranscript, type TranscriptEvent } from '../transcript/parse.js';
+import { parseTranscript, transcriptSession, type TranscriptEvent } from '../transcript/parse.js';
 import { str } from '../transcript/text.js';
 import { resolveTranscript, type Payload } from './runHook.js';
 
@@ -40,25 +40,15 @@ export function preCompact(db: DatabaseSync, payload: Payload): string {
   return withPrecedence(computeSteering(db), payload);
 }
 
-// A stranded cycle earns one log line each: an earlier compaction never closed, and the count is
-// how a reader tells a recovered backlog from a quiet one.
 function recover(db: DatabaseSync, events: TranscriptEvent[], sessionId: string | null): void {
   if (sessionId === null || sessionId === '') return;
-  for (const r of catchUp(db, events, sessionId)) {
-    const detail = r.summarized ? `${r.verdicts} verdicts persisted` : 'no summary found; verdicts left NULL';
-    logEvent(db, 'pre-compact', r.summarized ? 'info' : 'warn', `recovered cycle ${r.cycle}: ${detail}`);
-  }
+  logCatchUp(db, 'pre-compact', events, sessionId);
 }
 
 // The argument to `/compact <text>` arrives as custom_instructions, and steering must never
 // contradict an explicit user instruction — so a non-empty value earns one closing line ceding
 // precedence. Phrased as a summarization directive like every other line, since the summarizer
 // attributes this stdout to the user.
-function transcriptSession(events: TranscriptEvent[]): string | null {
-  for (const event of events) if (event.sessionId !== null) return event.sessionId;
-  return null;
-}
-
 function withPrecedence(steering: string, payload: Payload): string {
   const custom = str(payload.custom_instructions);
   if (custom === null || custom.trim() === '') return steering;

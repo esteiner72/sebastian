@@ -19,9 +19,11 @@ export interface Anchor {
 
 // One letter per type, and the set is closed: a new anchor type must claim an unused letter in
 // the same commit that introduces it, or ids stop being decodable.
-const TYPE_LETTERS: Record<AnchorType, string> = {
+export const TYPE_LETTERS: Record<AnchorType, string> = {
   error: 'e', answer: 'a', edit: 'd', user: 'u', cmd: 'c', read: 'r', url: 'w',
 };
+
+export const ANCHOR_TYPES = Object.keys(TYPE_LETTERS) as AnchorType[];
 
 type Draft = Omit<Anchor, 'id'>;
 

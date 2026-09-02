@@ -94,10 +94,8 @@ function parsePayload(stdin: string): Payload {
   return typeof parsed === 'object' && parsed !== null ? (parsed as Payload) : {};
 }
 
-
-// Known bug #13668: `transcript_path` arrives empty. The fallback is the newest file named for the
-// session id under any project directory, because a session that resumes in another directory
-// keeps its id. No file anywhere means the caller no-ops.
+// Known bug #13668: `transcript_path` arrives empty. An empty or missing path falls back to
+// `sessionTranscript`; no file anywhere means the caller no-ops.
 export function resolveTranscript(payload: Payload): string | null {
   const declared = str(payload.transcript_path);
   if (declared !== null && declared !== '' && existsSync(declared)) return declared;

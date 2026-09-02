@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { logEvent, markPending, recordedCycles } from '../store/db.js';
 import { targetCycle } from '../reconcile/cycle.js';
-import { parseTranscript, type TranscriptEvent } from '../transcript/parse.js';
+import { parseTranscript, transcriptSession } from '../transcript/parse.js';
 import { str } from '../transcript/text.js';
 import { resolveTranscript, type Payload } from './runHook.js';
 
@@ -30,9 +30,4 @@ export function postCompact(db: DatabaseSync, payload: Payload): string {
 function warn(db: DatabaseSync, msg: string): string {
   logEvent(db, 'post-compact', 'warn', msg);
   return '';
-}
-
-function transcriptSession(events: TranscriptEvent[]): string | null {
-  for (const event of events) if (event.sessionId !== null) return event.sessionId;
-  return null;
 }

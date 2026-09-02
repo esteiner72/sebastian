@@ -2,7 +2,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { isCompactSummary, readBoundaries, type Boundary, type TranscriptEvent } from '../transcript/parse.js';
 import { obj, str } from '../transcript/text.js';
 import {
-  archiveDelta, clearPending, pendingCycles, persistVerdicts, recordCycle, recordedCycles, stampReconciled,
+  archiveDelta, clearPending, logEvent, pendingCycles, persistVerdicts, recordCycle, recordedCycles,
+  stampReconciled,
 } from '../store/db.js';
 import { extractAnchors } from '../transcript/anchors.js';
 import { reconcile } from './reconcile.js';
@@ -80,6 +81,15 @@ export function catchUp(db: DatabaseSync, events: TranscriptEvent[], sessionId: 
     });
 }
 
+// Runs catch-up and logs one line per recovered cycle under the calling hook's name: an earlier
+// compaction never closed, and the count is how a reader tells a recovered backlog from a quiet one.
+export function logCatchUp(db: DatabaseSync, hook: string, events: TranscriptEvent[], sessionId: string): void {
+  for (const r of catchUp(db, events, sessionId)) {
+    const detail = r.summarized ? `${r.verdicts} verdicts persisted` : 'no summary found; verdicts left NULL';
+    logEvent(db, hook, r.summarized ? 'info' : 'warn', `recovered cycle ${r.cycle}: ${detail}`);
+  }
+}
+
 // Closes every pending cycle of a session whose transcript is gone. A boundary on disk with no
 // summary is recorded as an unreconciled cycle; a pending row with no transcript is the same
 // situation with less evidence, so it gets the same row: null summary, null metrics, and no
@@ -110,7 +120,7 @@ export function readSummary(events: TranscriptEvent[], boundary: Boundary): stri
 }
 
 function transcriptSummary(events: TranscriptEvent[], boundary: Boundary): string | null {
-  const record = events.filter((e) => isCompactSummary(e) && e.cycle === boundary.cycle + 1).at(0);
+  const record = events.find((e) => isCompactSummary(e) && e.cycle === boundary.cycle + 1);
   const content = obj(record?.record?.message)?.content;
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return null;

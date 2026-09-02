@@ -59,16 +59,16 @@ const USAGE = [
   '',
 ].join('\n');
 
-export async function main(argv: string[]): Promise<number> {
+export function main(argv: string[]): number {
   const [command, ...rest] = argv;
-  if (command === 'hook') return Promise.resolve(dispatchHook(rest[0]));
+  if (command === 'hook') return dispatchHook(rest[0]);
   // `report --all` reads the archive root, not the working directory, so it bypasses the project
   // resolution below — which would otherwise refuse from any directory that has never compacted.
   if (command === 'report' && rest.includes('--all')) {
     process.stdout.write(reportAll());
-    return Promise.resolve(0);
+    return 0;
   }
-  return Promise.resolve(runCommand(command, rest));
+  return runCommand(command, rest);
 }
 
 // The thin edge of the fail-open contract: runHook never throws, so the exit code is always 0, and
@@ -128,6 +128,4 @@ function runAgainst(slug: string, name: string, run: Command, argv: string[]): n
 
 const invokedDirectly =
   process.argv[1] !== undefined && fileURLToPath(import.meta.url) === realpathSync(process.argv[1]);
-if (invokedDirectly) {
-  process.exitCode = await main(process.argv.slice(2));
-}
+if (invokedDirectly) process.exitCode = main(process.argv.slice(2));
