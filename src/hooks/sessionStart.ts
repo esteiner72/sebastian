@@ -16,8 +16,8 @@ const RESUME_NOTE =
 // when nothing was dropped — the safe direction, since a renamed field would otherwise silence
 // injection with no symptom.
 export function sessionStart(db: DatabaseSync, payload: Payload): string {
-  if (source(payload) === 'resume') return additionalContext(RESUME_NOTE);
   const cycle = latestCycle(db, str(payload.session_id));
+  if (source(payload) === 'resume') return resumeNote(db, cycle);
   if (cycle === null) {
     logEvent(db, 'session-start', 'info', 'no cycle to inject');
     return '';
@@ -35,6 +35,15 @@ export function sessionStart(db: DatabaseSync, payload: Payload): string {
       `${text.length} chars, ${tokens} tokens injected`,
   );
   return text === '' ? '' : additionalContext(text);
+}
+
+// The note is Sebastian's cost too, so it is charged to the session's newest cycle. A session that
+// has never compacted has no cycle to charge, and the note goes unrecorded.
+function resumeNote(db: DatabaseSync, cycle: CycleIndex | null): string {
+  if (cycle !== null) {
+    recordInjection(db, cycle.sessionId, cycle.cycle, estimateTokens(RESUME_NOTE));
+  }
+  return additionalContext(RESUME_NOTE);
 }
 
 function source(payload: Payload): string | null {

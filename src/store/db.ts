@@ -501,15 +501,13 @@ export function currentCycle(db: DatabaseSync): number | null {
   return row?.cycle === null || row?.cycle === undefined ? null : Number(row.cycle);
 }
 
-// What SessionStart spent on this cycle's index. Written for every cycle the hook renders,
-// including the zero case: a cycle that dropped nothing spent nothing, and NULL is reserved for a
-// cycle SessionStart never reached.
+// What SessionStart has spent on this cycle so far, summed over every run: the index on compaction
+// and the availability note on each resume. Written for every run, including the zero case: a cycle
+// that dropped nothing spent nothing, and NULL is reserved for a cycle SessionStart never reached.
 export function recordInjection(db: DatabaseSync, sessionId: string, cycle: number, tokens: number): void {
-  db.prepare('UPDATE cycles SET injected_tokens = ? WHERE session_id = ? AND cycle = ?').run(
-    tokens,
-    sessionId,
-    cycle,
-  );
+  db.prepare(
+    'UPDATE cycles SET injected_tokens = COALESCE(injected_tokens, 0) + ? WHERE session_id = ? AND cycle = ?',
+  ).run(tokens, sessionId, cycle);
 }
 
 export interface HookStat {

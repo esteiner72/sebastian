@@ -35,9 +35,10 @@ CREATE TABLE IF NOT EXISTS anchors (
   PRIMARY KEY (session_id, id)
 );
 
--- `injected_tokens` is what SessionStart spent on this cycle's Forgotten Index. Zero means the
--- cycle dropped nothing and the hook rendered nothing; NULL means SessionStart never ran for it, so
--- the two cases stay distinguishable. `compaction_ms` is the platform's own reported duration for
+-- `injected_tokens` is what every SessionStart run has spent on this cycle: the Forgotten Index on
+-- compaction plus the availability note on each resume. Zero means the cycle dropped nothing and the
+-- hook rendered nothing; NULL means SessionStart never ran for it, so the two cases stay
+-- distinguishable. `compaction_ms` is the platform's own reported duration for
 -- this compaction, which makes Sebastian's share of it arithmetic rather than an argument.
 CREATE TABLE IF NOT EXISTS cycles (
   session_id      TEXT NOT NULL,

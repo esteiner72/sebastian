@@ -111,9 +111,10 @@ function totals(db: DatabaseSync): Record<string, number> {
   };
 }
 
-// One row per compaction that happened, in the order it happened. `injectedTokens` is null when
-// SessionStart never ran for the cycle, and 0 when it ran and the summary had dropped nothing —
-// the distinction is the point of the column.
+// One row per compaction that happened, in the order it happened. `injectedTokens` sums every
+// SessionStart run for the cycle, index and resume notes alike. It is null when SessionStart never
+// ran for the cycle, and 0 when it ran and the summary had dropped nothing — the distinction is the
+// point of the column.
 function cycles(db: DatabaseSync): Record<string, unknown>[] {
   const counted =
     'SELECT COUNT(*) FROM anchors a WHERE a.session_id = c.session_id AND a.cycle = c.cycle';
