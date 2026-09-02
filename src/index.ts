@@ -6,7 +6,7 @@ import { preCompact } from './hooks/preCompact.js';
 import { postCompact } from './hooks/postCompact.js';
 import { sessionStart } from './hooks/sessionStart.js';
 import { readStdin, runHook, type HookBody } from './hooks/runHook.js';
-import { dbPath, maxTelemetryId, openDb, projectSlug, stampCommandMs } from './store/db.js';
+import { dbPath, openDb, projectSlug, stampCommandMs } from './store/db.js';
 import { UsageError } from './cli/args.js';
 import { search } from './cli/search.js';
 import { show } from './cli/show.js';
@@ -98,16 +98,13 @@ function runCommand(name: string | undefined, argv: string[]): number {
 }
 
 // The command's own duration, measured around the whole invocation and stamped onto the telemetry
-// rows this invocation wrote. Rows are identified by id rather than by recency, because a command
-// may write none — `seb report` deliberately does — and the newest row would then belong to an
-// earlier retrieval.
+// rows this invocation wrote.
 function runAgainst(slug: string, name: string, run: Command, argv: string[]): number {
   const db = openDb(slug);
   const started = performance.now();
-  const before = maxTelemetryId(db);
   try {
     process.stdout.write(run(db, argv));
-    stampCommandMs(db, before, Math.round(performance.now() - started));
+    stampCommandMs(db, Math.round(performance.now() - started));
     return 0;
   } catch (err) {
     const reason = err instanceof UsageError ? err.message : String(err);

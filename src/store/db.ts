@@ -468,10 +468,15 @@ export interface TelemetryEntry {
   hits: number;
 }
 
+// The telemetry rows each connection has written, so a command's duration can be stamped onto its
+// own rows and no others. Two sessions in one project share the database file but never a
+// connection, and a CLI invocation opens exactly one.
+const writtenTelemetry = new WeakMap<DatabaseSync, number[]>();
+
 // The cycle is resolved here rather than passed in: a command runs from a shell and is never told
 // which cycle prompted it, so no caller could supply a better answer than the database already has.
 export function logTelemetry(db: DatabaseSync, t: TelemetryEntry): void {
-  db.prepare(
+  const result = db.prepare(
     'INSERT INTO telemetry (ts, cmd, anchor_type, session_id, anchor_id, hits, cycle) ' +
       'VALUES (?, ?, ?, ?, ?, ?, ?)',
   ).run(
@@ -483,6 +488,9 @@ export function logTelemetry(db: DatabaseSync, t: TelemetryEntry): void {
     t.hits,
     currentCycle(db),
   );
+  const ids = writtenTelemetry.get(db) ?? [];
+  ids.push(Number(result.lastInsertRowid));
+  writtenTelemetry.set(db, ids);
 }
 
 // The newest cycle recorded anywhere in the project, which is the one a retrieval most likely
@@ -591,15 +599,14 @@ export function commandStats(db: DatabaseSync): CommandStat[] {
 }
 
 // A command writes its telemetry row partway through its own body, so its duration is known only
-// after it returns. The id taken before the command runs is what keeps the stamp honest: `seb report`
-// writes no row at all, and updating the newest row blindly would credit its duration to somebody
-// else's retrieval.
-export function maxTelemetryId(db: DatabaseSync): number {
-  return Number(db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM telemetry').get()?.id ?? 0);
-}
-
-export function stampCommandMs(db: DatabaseSync, afterId: number, ms: number): void {
-  db.prepare('UPDATE telemetry SET ms = ? WHERE id > ?').run(ms, afterId);
+// after it returns. Only the rows this connection wrote are stamped: `seb report` writes none, and a
+// concurrent session's retrieval may have landed in between, so neither a newest-row nor an id-range
+// update would credit the duration to the right command.
+export function stampCommandMs(db: DatabaseSync, ms: number): void {
+  const ids = writtenTelemetry.get(db) ?? [];
+  if (ids.length === 0) return;
+  const marks = ids.map(() => '?').join(', ');
+  db.prepare(`UPDATE telemetry SET ms = ? WHERE id IN (${marks})`).run(ms, ...ids);
 }
 
 // The database plus its write-ahead log: the log holds committed rows that have not been
