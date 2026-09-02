@@ -7,8 +7,14 @@
 -- One project directory maps to one database, so two sessions in the same directory share this
 -- file. A zero busy timeout makes the first contended write fail instantly, including the write on
 -- the fail-open diagnostic path. WAL lives in the database header and converts once; busy_timeout
--- is per-connection, so it is re-set on every open.
+-- and synchronous are per-connection, so they are re-set on every open.
+--
+-- synchronous=NORMAL under WAL syncs the disk at checkpoint rather than at every commit. A hook
+-- commits several times per cycle, and one slow fsync on a shared disk is enough to miss a latency
+-- budget. The archive survives a process crash at this level; only an OS crash or power loss can
+-- lose the newest transactions.
 PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
 PRAGMA busy_timeout = 5000;
 
 CREATE TABLE IF NOT EXISTS messages (   -- durability past cleanupPeriodDays; PK is the dedupe
