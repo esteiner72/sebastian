@@ -30,6 +30,9 @@ afterAll(() => {
 const TS = '2026-08-31T12:00:00.000Z';
 const SEVEN_TYPES = fileURLToPath(new URL('./fixtures/seven-types.jsonl', import.meta.url));
 const STEERING_BASE = fileURLToPath(new URL('./golden/steering-base.txt', import.meta.url));
+// The block a hook prints when it has no transcript to count boundaries in: the same lines, with a
+// marker that cannot name the cycle.
+const STEERING_NO_TRANSCRIPT = fileURLToPath(new URL('./golden/steering-no-transcript.txt', import.meta.url));
 
 // A summary about something else entirely: it shares no content token with any anchor in either
 // transcript, so every anchor that reaches text matching is ruled dropped at score 0. That is what
@@ -308,7 +311,7 @@ describe('degraded hook payloads', () => {
 
     // No file anywhere for this session id: the archive is skipped, the steering channel is not.
     expect(runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: 'no-such-session', transcript_path: '', cwd })))
-      .toBe(readFileSync(STEERING_BASE, 'utf8'));
+      .toBe(readFileSync(STEERING_NO_TRANSCRIPT, 'utf8'));
     expect(count(db, 'FROM messages')).toBe(9);
     expect(count(db, "FROM log WHERE level = 'warn'")).toBe(1);
     db.close();
@@ -350,16 +353,16 @@ describe('degraded hook payloads', () => {
     const cwd = join(HOME, 'project-custom');
     const out = runHook('pre-compact', HOOKS['pre-compact'],
       payload({ session_id: 'fix-custom', cwd, custom_instructions: 'focus on the auth work' }));
-    expect(out).toBe(`${readFileSync(STEERING_BASE, 'utf8')}- The user's own compact instructions take precedence over the lines above wherever they conflict.\n`);
+    expect(out).toBe(`${readFileSync(STEERING_NO_TRANSCRIPT, 'utf8')}- The user's own compact instructions take precedence over the lines above wherever they conflict.\n`);
 
     // The probe observed custom_instructions: null on a bare /compact — no line for null, and
     // none for whitespace either.
     expect(runHook('pre-compact', HOOKS['pre-compact'],
       payload({ session_id: 'fix-custom', cwd, custom_instructions: null })))
-      .toBe(readFileSync(STEERING_BASE, 'utf8'));
+      .toBe(readFileSync(STEERING_NO_TRANSCRIPT, 'utf8'));
     expect(runHook('pre-compact', HOOKS['pre-compact'],
       payload({ session_id: 'fix-custom', cwd, custom_instructions: '  ' })))
-      .toBe(readFileSync(STEERING_BASE, 'utf8'));
+      .toBe(readFileSync(STEERING_NO_TRANSCRIPT, 'utf8'));
   });
 
 

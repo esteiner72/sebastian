@@ -2,8 +2,9 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import type { TranscriptEvent } from '../transcript/parse.js';
+import { parseLine, type TranscriptEvent } from '../transcript/parse.js';
 import type { Anchor, AnchorType } from '../transcript/anchors.js';
+import { messageText } from '../transcript/text.js';
 import type { Verdict } from '../reconcile/reconcile.js';
 
 // Matches Claude Code's own project-directory slug: every non-alphanumeric byte becomes a dash.
@@ -41,8 +42,10 @@ export function openDbAt(path: string): DatabaseSync {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const db = new DatabaseSync(path);
-  db.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
+  const schema = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
+  db.exec(schema);
   migrateColumns(db);
+  migrateMessageIndex(db, schema);
   chmodSync(path, 0o600);
   return db;
 }
@@ -60,6 +63,7 @@ const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
   ['cycles', 'pre_tokens', 'INTEGER'],
   ['cycles', 'post_tokens', 'INTEGER'],
   ['cycles', 'cumulative_dropped_tokens', 'INTEGER'],
+  ['messages', 'text', 'TEXT'],
 ];
 
 function migrateColumns(db: DatabaseSync): void {
@@ -71,17 +75,60 @@ function migrateColumns(db: DatabaseSync): void {
   }
 }
 
+// An archive from an earlier build carries that build's index definition, because CREATE VIRTUAL
+// TABLE IF NOT EXISTS cannot change an existing table. Any difference between the stored definition
+// and the schema's is the one trigger for the whole migration: the index is dropped and recreated
+// from the schema, every archived record still missing its text is extracted, and the index is
+// rebuilt, in one transaction, so an interrupted migration is simply run again on the next open. A
+// migrated archive pays one indexed catalogue lookup per open and nothing else. SQLite stores the
+// statement without its IF NOT EXISTS clause, so the comparison ignores that and all whitespace.
+function migrateMessageIndex(db: DatabaseSync, schema: string): void {
+  const create = /^CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts .*;$/m.exec(schema)?.[0];
+  if (create === undefined) throw new Error('schema.sql does not define messages_fts');
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'messages_fts'").get();
+  const stored = typeof row?.sql === 'string' ? row.sql : '';
+  const wanted = create.replace('IF NOT EXISTS ', '').replace(/;$/, '');
+  if (stored.replaceAll(/\s+/g, '') === wanted.replaceAll(/\s+/g, '')) return;
+  db.exec('BEGIN');
+  try {
+    db.exec('DROP TABLE messages_fts');
+    db.exec(create);
+    extractArchivedText(db);
+    db.exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+// Fills the text column in bounded batches, so a large archive is never held in memory whole.
+function extractArchivedText(db: DatabaseSync): void {
+  const page = db.prepare(
+    'SELECT rowid, record FROM messages WHERE text IS NULL AND rowid > ? ORDER BY rowid LIMIT 500',
+  );
+  const update = db.prepare('UPDATE messages SET text = ? WHERE rowid = ?');
+  let last = -1;
+  for (;;) {
+    const rows = page.all(last);
+    if (rows.length === 0) return;
+    for (const row of rows) {
+      update.run(messageText(parseLine(row.record as string)), row.rowid as number);
+      last = Number(row.rowid);
+    }
+  }
+}
+
 interface ArchiveStatements {
   message: ReturnType<DatabaseSync['prepare']>;
   messageFts: ReturnType<DatabaseSync['prepare']>;
   anchor: ReturnType<DatabaseSync['prepare']>;
-  anchorFts: ReturnType<DatabaseSync['prepare']>;
 }
 
 // One transaction per delta. Message dedupe rides the uuid primary key, anchor dedupe rides
-// (session_id, id), both via INSERT OR IGNORE. An FTS row is written only when its base insert
-// actually added a row and is keyed on that row's rowid, so re-archiving the same delta touches
-// neither index. Messages go first: anchors carry a foreign key into them.
+// (session_id, id), both via INSERT OR IGNORE. A message's index row is written only when its base
+// insert actually added a row and is keyed on that row's rowid, so re-archiving the same delta
+// leaves the index untouched. Messages go first: anchors carry a foreign key into them.
 //
 // The two lists are derived independently — anchor extraction needs whole-file context for turn
 // numbering and pending-question state, while a hook archives only a delta — so an anchor can name
@@ -95,14 +142,14 @@ export function archiveDelta(
 ): { messages: number; anchors: number } {
   const stmts: ArchiveStatements = {
     message: db.prepare(
-      'INSERT OR IGNORE INTO messages (uuid, session_id, cycle, turn, ts, role, record) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT OR IGNORE INTO messages (uuid, session_id, cycle, turn, ts, role, record, text) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ),
-    messageFts: db.prepare('INSERT INTO messages_fts (rowid, record) VALUES (?, ?)'),
+    messageFts: db.prepare('INSERT INTO messages_fts (rowid, text) VALUES (?, ?)'),
     anchor: db.prepare(
       'INSERT OR IGNORE INTO anchors (id, uuid, session_id, cycle, turn, type, key, excerpt) ' +
         'SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM messages WHERE uuid = ?)',
     ),
-    anchorFts: db.prepare('INSERT INTO anchors_fts (rowid, key, excerpt) VALUES (?, ?, ?)'),
   };
   db.exec('BEGIN');
   try {
@@ -126,9 +173,12 @@ export function archiveDelta(
 // parses without a uuid, and takes the same path.
 function insertMessage(stmts: ArchiveStatements, e: TranscriptEvent): number {
   if (e.uuid === null) return 0;
-  const result = stmts.message.run(e.uuid, e.sessionId ?? '', e.cycle, e.turn, e.ts, e.role, e.raw);
+  const text = messageText(e.record);
+  const result = stmts.message.run(
+    e.uuid, e.sessionId ?? '', e.cycle, e.turn, e.ts, e.role, e.raw, text,
+  );
   if (result.changes === 0) return 0;
-  stmts.messageFts.run(result.lastInsertRowid, e.raw);
+  stmts.messageFts.run(result.lastInsertRowid, text);
   return 1;
 }
 
@@ -137,61 +187,101 @@ function insertAnchor(stmts: ArchiveStatements, a: Anchor): number {
     a.id, a.uuid, a.sessionId, a.cycle, a.turn, a.type, a.key, a.excerpt, a.uuid,
   );
   if (result.changes === 0) return 0;
-  stmts.anchorFts.run(result.lastInsertRowid, a.key, a.excerpt);
   return 1;
 }
 
-export interface AnchorFilters {
-  type?: AnchorType;
+export interface SearchFilters {
+  type?: AnchorType;          // the hit must carry an anchor of this type
   cycle?: number;
   sessionId?: string;
   turnRange?: { from: number; to: number };
   limit?: number;
+  match?: 'all' | 'any';      // the query's tokens combine as AND (the default) or as OR
 }
 
-const FROM_MATCHED = 'FROM anchors_fts JOIN anchors a ON a.rowid = anchors_fts.rowid';
+export interface MessageHit {
+  sessionId: string;
+  cycle: number;
+  turn: number;
+  role: string | null;
+  text: string;               // the stored text, whole; the renderer windows it
+  anchors: { id: string; type: AnchorType }[];   // the anchors on this record, in extraction order
+}
 
-// One page of the match, ordered by FTS rank.
-export function searchAnchors(db: DatabaseSync, query: string, filters: AnchorFilters = {}): Anchor[] {
+const FROM_MATCHED = 'FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid';
+
+// One page of the match, ordered by FTS rank. Each hit carries the anchors on its record, one
+// indexed lookup per page row.
+export function searchMessages(
+  db: DatabaseSync,
+  query: string,
+  filters: SearchFilters = {},
+): MessageHit[] {
   const matched = matchClause(query, filters);
   if (matched === null) return [];
   const sql =
-    'SELECT a.id, a.uuid, a.session_id, a.cycle, a.turn, a.type, a.key, a.excerpt ' +
+    'SELECT m.uuid, m.session_id, m.cycle, m.turn, m.role, m.text ' +
     `${FROM_MATCHED} ${matched.where} ORDER BY rank LIMIT ?`;
-  return db.prepare(sql).all(...matched.params, clampLimit(filters.limit)).map(rowToAnchor);
+  const anchorsOf = db.prepare('SELECT id, type FROM anchors WHERE uuid = ? ORDER BY rowid');
+  return db.prepare(sql).all(...matched.params, clampLimit(filters.limit)).map((row) => ({
+    sessionId: row.session_id as string,
+    cycle: Number(row.cycle),
+    turn: Number(row.turn),
+    role: (row.role as string | null) ?? null,
+    text: (row.text as string | null) ?? '',
+    anchors: anchorsOf
+      .all(row.uuid as string)
+      .map((a) => ({ id: a.id as string, type: a.type as AnchorType })),
+  }));
 }
 
-// The size of the whole match, not of the page. `searchAnchors` returns at most `clampLimit` rows,
-// and a page that cannot say how much it left behind reads as the whole archive.
-export function countAnchors(db: DatabaseSync, query: string, filters: AnchorFilters = {}): number {
+// The size of the whole match, not of the page. `searchMessages` returns at most `clampLimit`
+// rows, and a page that cannot say how much it left behind reads as the whole archive.
+export function countMessages(db: DatabaseSync, query: string, filters: SearchFilters = {}): number {
   const matched = matchClause(query, filters);
   if (matched === null) return 0;
   const row = db.prepare(`SELECT COUNT(*) AS n ${FROM_MATCHED} ${matched.where}`).get(...matched.params);
   return Number(row?.n ?? 0);
 }
 
-// The query is reduced to letter, digit and underscore tokens before it reaches MATCH, which drops
-// FTS5's operator characters (dashes, colons, parentheses). Each surviving token is then quoted,
-// because the reduction cannot drop the operator *words*: a bare AND, OR, NOT or NEAR is grammar to
-// FTS5, and a user searching `AND backoff` would otherwise get a syntax error instead of rows.
-// Quoted tokens combine as an implicit AND. The class is Unicode-aware because FTS5's unicode61
-// tokenizer indexes non-ASCII content: an ASCII-only reduction turns an accented identifier or a
-// CJK path into archived-but-unreachable text. Filters compile to plain WHERE clauses on the joined
-// base table. A query with no surviving token matches nothing, which the callers read as null.
+// The query's searchable tokens: runs of letters, digits and underscores. The class is
+// Unicode-aware because FTS5's unicode61 tokenizer indexes non-ASCII content, and an ASCII-only
+// reduction would turn an accented identifier or a CJK path into archived-but-unreachable text.
+export function queryTokens(query: string): string[] {
+  return query.match(/[\p{L}\p{N}_]+/gu) ?? [];
+}
+
+// The query is reduced to its tokens before it reaches MATCH, which drops FTS5's operator
+// characters (dashes, colons, parentheses). Each surviving token is then quoted, because the
+// reduction cannot drop the operator *words*: a bare AND, OR, NOT or NEAR is grammar to FTS5, and a
+// user searching `AND backoff` would otherwise get a syntax error instead of rows. Quoted tokens
+// combine as an implicit AND, or as an explicit OR for the nearest-match fallback. A query with no
+// surviving token matches nothing, which the callers read as null.
+export function ftsMatch(query: string, match: 'all' | 'any' = 'all'): string | null {
+  const quoted = queryTokens(query).map((t) => `"${t}"`);
+  if (quoted.length === 0) return null;
+  return quoted.join(match === 'any' ? ' OR ' : ' ');
+}
+
+// Filters compile to plain WHERE clauses on the joined base table; `type` is a membership test on
+// the anchors of the record.
 function matchClause(
   query: string,
-  filters: AnchorFilters,
+  filters: SearchFilters,
 ): { where: string; params: SQLInputValue[] } | null {
-  const match = (query.match(/[\p{L}\p{N}_]+/gu) ?? []).map((t) => `"${t}"`).join(' ');
-  if (match === '') return null;
-  let where = 'WHERE anchors_fts MATCH ?';
+  const match = ftsMatch(query, filters.match);
+  if (match === null) return null;
+  let where = 'WHERE messages_fts MATCH ?';
   const params: SQLInputValue[] = [match];
-  if (filters.type !== undefined) { where += ' AND a.type = ?'; params.push(filters.type); }
-  if (filters.cycle !== undefined) { where += ' AND a.cycle = ?'; params.push(filters.cycle); }
-  if (filters.sessionId !== undefined) { where += ' AND a.session_id = ?'; params.push(filters.sessionId); }
+  if (filters.cycle !== undefined) { where += ' AND m.cycle = ?'; params.push(filters.cycle); }
+  if (filters.sessionId !== undefined) { where += ' AND m.session_id = ?'; params.push(filters.sessionId); }
   if (filters.turnRange !== undefined) {
-    where += ' AND a.turn BETWEEN ? AND ?';
+    where += ' AND m.turn BETWEEN ? AND ?';
     params.push(filters.turnRange.from, filters.turnRange.to);
+  }
+  if (filters.type !== undefined) {
+    where += ' AND EXISTS (SELECT 1 FROM anchors x WHERE x.uuid = m.uuid AND x.type = ?)';
+    params.push(filters.type);
   }
   return { where, params };
 }
@@ -258,7 +348,7 @@ function likePrefix(prefix: string): string {
 // reader copied back resolves to the session it names instead of matching nothing.
 export function sessionsMatching(db: DatabaseSync, prefix: string): string[] {
   return db
-    .prepare("SELECT DISTINCT session_id FROM anchors WHERE session_id LIKE ? ESCAPE '\\' ORDER BY session_id")
+    .prepare("SELECT DISTINCT session_id FROM messages WHERE session_id LIKE ? ESCAPE '\\' ORDER BY session_id")
     .all(`${likePrefix(prefix)}%`)
     .map((row) => row.session_id as string);
 }

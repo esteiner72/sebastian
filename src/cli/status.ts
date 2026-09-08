@@ -30,7 +30,7 @@ export function status(db: DatabaseSync, argv: string[]): string {
     latestLine(cycle),
     '',
   ];
-  return capOutput(`${lines.join('\n')}\n${computeSteering(db)}`, OUTPUT_TOKENS);
+  return capOutput(`${lines.join('\n')}\n${computeSteering(db, null)}`, OUTPUT_TOKENS);
 }
 
 // Two conditions, each printed only while it holds, so neither can become permanent furniture.

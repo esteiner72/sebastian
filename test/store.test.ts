@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { extractAnchors } from '../src/transcript/anchors.js';
 import { parseTranscript } from '../src/transcript/parse.js';
 import {
-  archiveDelta, logTelemetry, messagesInRange, openDbAt, recordCycle, recordInjection, searchAnchors,
+  archiveDelta, logTelemetry, messagesInRange, openDbAt, recordCycle, recordInjection, searchMessages,
 } from '../src/store/db.js';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -32,10 +32,10 @@ describe('store round-trip', () => {
     const { db, events, anchors, counts } = freshArchive();
     expect(counts).toEqual({ messages: events.length, anchors: anchors.length });
 
-    // "exponential" appears only in the user decision at line 8 of the fixture (uuid u7).
-    const hits = searchAnchors(db, 'exponential backoff');
-    expect(hits.map((a) => ({ id: a.id, type: a.type, uuid: a.uuid }))).toEqual([
-      { id: 't7u1', type: 'user', uuid: 'u7' },
+    // "exponential" appears only in the user decision at line 8 of the fixture (turn 7).
+    const hits = searchMessages(db, 'exponential backoff');
+    expect(hits.map((h) => ({ turn: h.turn, anchors: h.anchors }))).toEqual([
+      { turn: 7, anchors: [{ id: 't7u1', type: 'user' }] },
     ]);
 
     const lines = readFileSync(FIXTURE, 'utf8').split('\n').filter((l) => l.trim() !== '');
@@ -50,12 +50,13 @@ describe('store round-trip', () => {
   // from a command line is the clamp's problem, not SQLite's.
   it('narrows a multi-hit query by type and by limit, so neither `seb search --type` nor a negative `--limit` can silently return the unfiltered set', () => {
     const { db } = freshArchive();
-    const urls = searchAnchors(db, 'backoff', { type: 'url' });
-    expect(urls.map((a) => ({ type: a.type, key: a.key }))).toEqual([
-      { type: 'url', key: 'https://example.com/docs/backoff' },
+    // "backoff" is in turns 1, 5 and 7; only turn 5 carries a url anchor.
+    const urls = searchMessages(db, 'backoff', { type: 'url' });
+    expect(urls.map((h) => ({ turn: h.turn, ids: h.anchors.map((a) => a.id) }))).toEqual([
+      { turn: 5, ids: ['t5c1', 't5r1', 't5w1'] },
     ]);
-    expect(searchAnchors(db, 'backoff').length).toBeGreaterThan(1);
-    expect(searchAnchors(db, 'backoff', { limit: -1 })).toEqual([]);
+    expect(searchMessages(db, 'backoff').length).toBeGreaterThan(1);
+    expect(searchMessages(db, 'backoff', { limit: -1 })).toEqual([]);
     db.close();
   });
 
@@ -63,8 +64,8 @@ describe('store round-trip', () => {
     const { db, events, anchors } = freshArchive();
     expect(archiveDelta(db, events, anchors)).toEqual({ messages: 0, anchors: 0 });
 
-    // A double-fed external-content FTS index would return the same anchor twice.
-    expect(searchAnchors(db, 'exponential backoff')).toHaveLength(1);
+    // A double-fed external-content FTS index would return the same record twice.
+    expect(searchMessages(db, 'exponential backoff')).toHaveLength(1);
     const rows = db
       .prepare('SELECT (SELECT count(*) FROM messages) AS m, (SELECT count(*) FROM anchors) AS a')
       .get();
@@ -111,12 +112,13 @@ describe('store round-trip', () => {
       messages: delta.length,
       anchors: anchors.filter((a) => a.uuid !== orphaned).length,
     });
-    expect(searchAnchors(db, 'exponential backoff')).toHaveLength(1);
-    expect(searchAnchors(db, 'timeout', { type: 'answer' })).toEqual([]);
+    expect(searchMessages(db, 'exponential backoff')).toHaveLength(1);
+    // "deadline" is in the held-back answer at turn 1 and nowhere else.
+    expect(searchMessages(db, 'deadline', { type: 'answer' })).toEqual([]);
 
     // The skip is not a loss: the held-back message arriving later admits its anchors.
     expect(archiveDelta(db, events, anchors)).toEqual({ messages: 1, anchors: 2 });
-    expect(searchAnchors(db, 'timeout', { type: 'answer' })).toHaveLength(1);
+    expect(searchMessages(db, 'deadline', { type: 'answer' })).toHaveLength(1);
     db.close();
   });
 
@@ -140,9 +142,9 @@ describe('store round-trip', () => {
     const { db } = freshArchive();
     // "and" is a real token of the user decision at line 8, so quoting makes this a two-word
     // search that matches; unquoted it is an operator with nothing on its left.
-    expect(searchAnchors(db, 'AND backoff').map((a) => a.id)).toEqual(['t7u1']);
-    expect(searchAnchors(db, 'NEAR retry OR sync').map((a) => a.id)).toEqual([]);
-    expect(searchAnchors(db, '--- :: ()')).toEqual([]);
+    expect(searchMessages(db, 'AND backoff').map((h) => h.turn)).toEqual([7]);
+    expect(searchMessages(db, 'NEAR retry OR sync').map((h) => h.turn)).toEqual([]);
+    expect(searchMessages(db, '--- :: ()')).toEqual([]);
     db.close();
   });
 
@@ -163,8 +165,57 @@ describe('store round-trip', () => {
     const events = parseTranscript(path);
     const db = tempDb('seb-unicode-db-');
     expect(archiveDelta(db, events, extractAnchors(events))).toEqual({ messages: 1, anchors: 1 });
-    expect(searchAnchors(db, 'café').map((a) => a.uuid)).toEqual(['u0']);
-    expect(searchAnchors(db, '中文').map((a) => a.uuid)).toEqual(['u0']);
+    expect(searchMessages(db, 'café').map((h) => [h.sessionId, h.turn])).toEqual([['unicode', 0]]);
+    expect(searchMessages(db, '中文').map((h) => [h.sessionId, h.turn])).toEqual([['unicode', 0]]);
+    db.close();
+  });
+
+  // The two live archives were built when the message index covered the raw JSONL line and the
+  // messages table had no text column. Opening one must move it to the text index without losing a
+  // record, and a fact that exists only inside a tool result must then be reachable. The eval
+  // harness builds every database fresh and never sees an archive from an earlier build.
+  it('search reaches a tool result archived before the text column existed, by an inflected form of a word in it', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'seb-text-migrate-')), 'sebastian.db');
+    const probe = JSON.stringify({
+      type: 'user', uuid: 'u5', sessionId: 'old-build', timestamp: '2026-09-02T08:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_p', content: 'NewSeqId Seq 2611\nDELETE 204' }],
+      },
+    });
+    const ask = JSON.stringify({
+      type: 'user', uuid: 'u4', sessionId: 'old-build', timestamp: '2026-09-02T07:59:00.000Z',
+      message: { role: 'user', content: 'probe the write path and read the sequence back' },
+    });
+    const before = new DatabaseSync(path);
+    before.exec(`
+      CREATE TABLE messages (uuid TEXT PRIMARY KEY, session_id TEXT NOT NULL, cycle INTEGER NOT NULL,
+        turn INTEGER NOT NULL, ts TEXT, role TEXT, record TEXT NOT NULL);
+      CREATE VIRTUAL TABLE messages_fts USING fts5(record, content='messages', content_rowid='rowid');
+      CREATE TABLE anchors (id TEXT NOT NULL, uuid TEXT NOT NULL, session_id TEXT NOT NULL, cycle INTEGER NOT NULL,
+        turn INTEGER NOT NULL, type TEXT NOT NULL, key TEXT NOT NULL, excerpt TEXT NOT NULL, PRIMARY KEY (session_id, id));
+      CREATE VIRTUAL TABLE anchors_fts USING fts5(key, excerpt, content='anchors', content_rowid='rowid');
+    `);
+    const insert = before.prepare(
+      'INSERT INTO messages (uuid, session_id, cycle, turn, ts, role, record) VALUES (?, ?, 0, ?, ?, ?, ?)',
+    );
+    const fts = before.prepare('INSERT INTO messages_fts (rowid, record) VALUES (?, ?)');
+    for (const [uuid, turn, raw] of [['u4', 4, ask], ['u5', 5, probe]] as const) {
+      const row = insert.run(uuid, 'old-build', turn, '2026-09-02T08:00:00.000Z', 'user', raw);
+      fts.run(row.lastInsertRowid, raw);
+    }
+    before.close();
+
+    const db = openDbAt(path);
+    const hits = searchMessages(db, '2611');
+    expect(hits.map((h) => [h.sessionId, h.turn])).toEqual([['old-build', 5]]);
+    // The record says DELETE; the reader types the past tense. Stemming makes them one token.
+    expect(searchMessages(db, 'deleted').map((h) => h.turn)).toEqual([5]);
+    expect(messagesInRange(db, 'old-build', 5, 5).map((m) => m.raw)).toEqual([probe]);
+    // The envelope is no longer indexed, so a field name matches nothing.
+    expect(searchMessages(db, 'timestamp')).toEqual([]);
+    // The anchor index an earlier build wrote is gone, shadow tables included.
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'anchors_fts%'").all()).toEqual([]);
     db.close();
   });
 });

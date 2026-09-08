@@ -1,25 +1,32 @@
 import { parseArgs } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  countAnchors, logTelemetry, MAX_LIMIT, searchAnchors, sessionsMatching, type AnchorFilters,
+  countMessages, logTelemetry, MAX_LIMIT, queryTokens, searchMessages, sessionsMatching,
+  type MessageHit, type SearchFilters,
 } from '../store/db.js';
-import type { Anchor } from '../transcript/anchors.js';
+import type { AnchorType } from '../transcript/anchors.js';
 import { anchorType, integer, turnRange, UsageError, usageWrap } from './args.js';
-import { anchorLine, capOutput, OUTPUT_TOKENS, plural, spansSessions } from './output.js';
+import { capOutput, OUTPUT_TOKENS, plural, snippetAround, spansSessions } from './output.js';
 
 const HINT = '--type, --cycle, or a smaller --limit';
+
+interface Page {
+  hits: MessageHit[];
+  total: number;
+  nearest: boolean;
+}
 
 // Project scope is the default and `--session` narrows it: sessions fork, chain and restart, and a
 // reader asking what was decided about something does not know which session id holds it.
 export function search(db: DatabaseSync, argv: string[]): string {
   const { query, filters } = parseSearch(argv);
   filters.sessionId = resolveSession(db, filters.sessionId);
-  const hits = searchAnchors(db, query, filters);
-  logSearch(db, filters, hits);
-  return render(query, hits, countAnchors(db, query, filters));
+  const page = findPage(db, query, filters);
+  logSearch(db, filters, page.hits);
+  return render(query, page);
 }
 
-function parseSearch(argv: string[]): { query: string; filters: AnchorFilters } {
+function parseSearch(argv: string[]): { query: string; filters: SearchFilters } {
   const { values, positionals } = usageWrap(() =>
     parseArgs({
       args: argv,
@@ -48,7 +55,7 @@ function parseSearch(argv: string[]): { query: string; filters: AnchorFilters } 
 }
 
 // A zero or negative limit reaches the store as `LIMIT 0`, which returns nothing. The reader would
-// then be told that no anchor matches, which is the exact wrong answer the count exists to prevent.
+// then be told that no record matches, which is the exact wrong answer the count exists to prevent.
 function limitOf(value: string | undefined): number | undefined {
   const limit = integer(value, '--limit');
   if (limit !== undefined && limit < 1) {
@@ -58,7 +65,7 @@ function limitOf(value: string | undefined): number | undefined {
 }
 
 // A session arrives as the 8-character prefix that display prints, or as a whole id. Refusing an
-// unresolvable one is the point: a filter that matched nothing would answer "no anchors", and the
+// unresolvable one is the point: a filter that matched nothing would answer "no records", and the
 // reader would conclude the material was never archived rather than that the filter was wrong.
 function resolveSession(db: DatabaseSync, session: string | undefined): string | undefined {
   if (session === undefined) return undefined;
@@ -72,26 +79,54 @@ function resolveSession(db: DatabaseSync, session: string | undefined): string |
   return only;
 }
 
+// The query's tokens combine as AND. When that finds nothing and there is more than one token, the
+// same query runs as OR and the heading says so: a tool that answers "these are the nearest"
+// survives one imprecise query, and one that answers "no match" is not tried a second time.
+function findPage(db: DatabaseSync, query: string, filters: SearchFilters): Page {
+  const hits = searchMessages(db, query, filters);
+  if (hits.length > 0) return { hits, total: countMessages(db, query, filters), nearest: false };
+  if (queryTokens(query).length < 2) return { hits, total: 0, nearest: false };
+  const any: SearchFilters = { ...filters, match: 'any' };
+  const nearest = searchMessages(db, query, any);
+  const total = nearest.length === 0 ? 0 : countMessages(db, query, any);
+  return { hits: nearest, total, nearest: true };
+}
+
 // Relevance selects the page — the store orders by FTS rank — and position renders it, because a
 // reader scanning a page of hits is reconstructing a session, not ranking one.
-function render(query: string, hits: Anchor[], total: number): string {
-  if (hits.length === 0) return `No anchors match "${query}".\n`;
+function render(query: string, page: Page): string {
+  const { hits, total } = page;
+  if (hits.length === 0) return `No records match "${query}".\n`;
   const qualified = spansSessions(hits);
+  const tokens = queryTokens(query);
   const body = [...hits]
     .sort(byPosition)
-    .map((a) => `${anchorLine(a, qualified)}\n`)
+    .map((h) => `${hitLine(h, qualified, tokens)}\n`)
     .join('');
   return (
-    `${heading(query, hits.length, total)}${capOutput(body, OUTPUT_TOKENS, HINT)}` +
-    `Retrieve an original with \`seb show <id>\`.\n${trailer(hits.length, total)}`
+    `${heading(query, page)}${capOutput(body, OUTPUT_TOKENS, HINT)}` +
+    `Retrieve one with \`seb show <cycle:turn>\` or \`seb show <id>\`.\n${trailer(hits.length, total)}`
   );
+}
+
+// One record, one line: where it sits, who said it, the anchors on it, and enough of its text to
+// judge whether it is worth retrieving. The handle is what `seb show` takes back.
+function hitLine(h: MessageHit, qualified: boolean, tokens: string[]): string {
+  const handle = `${qualified ? `${h.sessionId.slice(0, 8)}/` : ''}${h.cycle}:${h.turn}`;
+  const anchors = h.anchors.length === 0 ? '' : ` (${h.anchors.map((a) => a.id).join(' ')})`;
+  return `${handle} ${h.role ?? '-'}${anchors} — ${snippetAround(h.text, tokens)}`;
 }
 
 // A page that states its own size as a total is the same lie as an empty result from a filter that
 // could not resolve: the reader concludes the archive holds nothing else and stops looking.
-function heading(query: string, shown: number, total: number): string {
-  if (shown >= total) return `${plural(shown, 'anchor')} for "${query}":\n`;
-  return `${shown} of ${plural(total, 'anchor')} for "${query}" — showing the ${shown} best matches.\n`;
+function heading(query: string, { hits, total, nearest }: Page): string {
+  const shown = hits.length;
+  if (nearest) {
+    const count = shown >= total ? `${total}` : `showing the ${shown} best of ${total} that`;
+    return `No record has every word of "${query}" — ${count} match some of it:\n`;
+  }
+  if (shown >= total) return `${plural(shown, 'hit')} for "${query}":\n`;
+  return `${shown} of ${plural(total, 'hit')} for "${query}" — showing the ${shown} best matches.\n`;
 }
 
 // At the ceiling `--limit` is no longer the lever to reach for, so it is not the one offered.
@@ -103,24 +138,31 @@ function trailer(shown: number, total: number): string {
   return 'Raise --limit or narrow with --type, --cycle or --turn to see the rest.\n';
 }
 
-function byPosition(a: Anchor, b: Anchor): number {
-  return (
-    a.sessionId.localeCompare(b.sessionId) || a.cycle - b.cycle || a.turn - b.turn ||
-    a.id.localeCompare(b.id)
-  );
+function byPosition(a: MessageHit, b: MessageHit): number {
+  return a.sessionId.localeCompare(b.sessionId) || a.cycle - b.cycle || a.turn - b.turn;
 }
 
-// One row per type the search reached, because steering counts retrievals per type. A search that
-// found nothing still logs a row, at zero hits: the drop-rate multiplier must not be able to
-// mistake a miss for a recovery.
-function logSearch(db: DatabaseSync, filters: AnchorFilters, hits: Anchor[]): void {
-  const counts = new Map<string, number>();
-  for (const a of hits) counts.set(a.type, (counts.get(a.type) ?? 0) + 1);
+// One row per anchor type the page reached, counting the records that carry it, because steering
+// counts retrievals per type. A page of records without anchors is still a retrieval and logs its
+// size under no type. A search that found nothing logs a zero: the drop-rate multiplier must not be
+// able to mistake a miss for a recovery.
+function logSearch(db: DatabaseSync, filters: SearchFilters, hits: MessageHit[]): void {
+  const sessionId = filters.sessionId;
+  if (hits.length === 0) {
+    logTelemetry(db, { cmd: 'search', anchorType: filters.type, sessionId, hits: 0 });
+    return;
+  }
+  const counts = new Map<AnchorType, number>();
+  for (const h of hits) {
+    for (const type of new Set(h.anchors.map((a) => a.type))) {
+      counts.set(type, (counts.get(type) ?? 0) + 1);
+    }
+  }
   if (counts.size === 0) {
-    logTelemetry(db, { cmd: 'search', anchorType: filters.type, sessionId: filters.sessionId, hits: 0 });
+    logTelemetry(db, { cmd: 'search', anchorType: undefined, sessionId, hits: hits.length });
     return;
   }
   for (const [type, n] of counts) {
-    logTelemetry(db, { cmd: 'search', anchorType: type, sessionId: filters.sessionId, hits: n });
+    logTelemetry(db, { cmd: 'search', anchorType: type, sessionId, hits: n });
   }
 }

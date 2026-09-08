@@ -1,7 +1,7 @@
 -- One database per project. Executed in full on every open, so every statement is idempotent.
--- Both FTS tables are external-content over their base table's implicit rowid; rows are inserted
--- explicitly alongside the base insert, no triggers. Never VACUUM this database: the base tables
--- have TEXT primary keys, so their implicit rowids — which the FTS indexes key on — would be
+-- The message index is external-content over the messages table's implicit rowid; rows are
+-- inserted explicitly alongside the base insert, no triggers. Never VACUUM this database: the base
+-- tables have TEXT primary keys, so their implicit rowids — which the index keys on — would be
 -- renumbered.
 
 -- One project directory maps to one database, so two sessions in the same directory share this
@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS messages (   -- durability past cleanupPeriodDays; PK
   turn       INTEGER NOT NULL,
   ts         TEXT,
   role       TEXT,
-  record     TEXT NOT NULL              -- the original JSONL line, verbatim
+  record     TEXT NOT NULL,             -- the original JSONL line, verbatim
+  text       TEXT                       -- what the record said or saw; see messageText
 );
 
 CREATE TABLE IF NOT EXISTS anchors (
@@ -104,8 +105,11 @@ CREATE TABLE IF NOT EXISTS log (
   ms INTEGER
 );
 
-CREATE VIRTUAL TABLE IF NOT EXISTS anchors_fts  USING fts5(key, excerpt, content='anchors',  content_rowid='rowid');
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(record,       content='messages', content_rowid='rowid');
+-- Anchors are listed and looked up by id, never searched, so they carry no index of their own.
+DROP TABLE IF EXISTS anchors_fts;
+-- Porter stemming on the message index: a reader types `seed` for an archive that says `seeds`, and
+-- `deleted` for a line that says `DELETE`. Queries are stemmed the same way at match time.
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text, tokenize='porter unicode61', content='messages', content_rowid='rowid');
 
 -- Retrieval paths that no primary key serves. `messages` keys on uuid alone, so a turn lookup would
 -- scan every archived record; the anchors primary key leads on session_id, so a bare id would scan
@@ -115,3 +119,4 @@ CREATE INDEX IF NOT EXISTS messages_session_turn ON messages(session_id, turn); 
 CREATE INDEX IF NOT EXISTS messages_cycle_turn   ON messages(cycle, turn);       -- seb show <cycle:turn>
 CREATE INDEX IF NOT EXISTS anchors_id            ON anchors(id);                 -- seb show on an unqualified anchor id
 CREATE INDEX IF NOT EXISTS anchors_session_cycle ON anchors(session_id, cycle, turn);  -- the injected index, in turn order
+CREATE INDEX IF NOT EXISTS anchors_uuid          ON anchors(uuid, type);           -- the anchors on a search hit, and --type

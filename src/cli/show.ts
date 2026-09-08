@@ -4,7 +4,8 @@ import {
   logTelemetry, lookupAnchors, messagesInRange, sessionsAtTurn, type ArchivedMessage,
 } from '../store/db.js';
 import { TYPE_LETTERS, type Anchor } from '../transcript/anchors.js';
-import { TOKEN_CHARS } from '../transcript/text.js';
+import { parseLine } from '../transcript/parse.js';
+import { obj, str, TOKEN_CHARS } from '../transcript/text.js';
 import { integer, UsageError, usageWrap } from './args.js';
 import { displayId, OUTPUT_TOKENS, plural } from './output.js';
 
@@ -25,18 +26,58 @@ interface Spot {
 export function show(db: DatabaseSync, argv: string[]): string {
   const { target, context } = parseShow(argv);
   const spot = resolve(db, target);
-  const records = messagesInRange(db, spot.sessionId, spot.turn - context, spot.turn + context);
+  const window = messagesInRange(db, spot.sessionId, spot.turn - context, spot.turn + context);
   logTelemetry(db, {
     cmd: 'show',
     anchorType: spot.anchor?.type,
     anchorId: spot.anchor?.id,
     sessionId: spot.sessionId,
-    hits: records.length === 0 ? 0 : 1,
+    hits: window.length === 0 ? 0 : 1,
   });
-  if (records.length === 0) {
+  if (window.length === 0) {
     throw new UsageError(`${target} resolves to turn ${spot.turn}, which is not in the archive`);
   }
-  return render(target, spot, context, records);
+  const results = pairedResults(db, spot, window);
+  const shown = new Set(window.map((m) => m.turn));
+  const records = [...window, ...results.filter((m) => !shown.has(m.turn))];
+  return render(target, spot, context, records, results.map((m) => m.turn));
+}
+
+// A tool call's result is usually several records away, because the records between them carry no
+// uuid and are not archived, and a reader who found the call by its anchor cannot know how far. The
+// next archived turns within reach are parsed, and the ones answering the target's tool_use ids
+// join the window. The reach bounds the parse work: on both live archives every result sits within
+// six archived turns of its call.
+const RESULT_REACH = 8;
+
+function pairedResults(db: DatabaseSync, spot: Spot, window: ArchivedMessage[]): ArchivedMessage[] {
+  const target = window.find((m) => m.turn === spot.turn);
+  if (target === undefined) return [];
+  const calls = toolUseIds(parseLine(target.raw));
+  if (calls.size === 0) return [];
+  return messagesInRange(db, spot.sessionId, spot.turn + 1, spot.turn + RESULT_REACH)
+    .filter((m) => toolResultIds(parseLine(m.raw)).some((id) => calls.has(id)));
+}
+
+function contentBlocks(record: Record<string, unknown> | null): Record<string, unknown>[] {
+  const content = obj(record?.message)?.content;
+  if (!Array.isArray(content)) return [];
+  return content.map((b) => obj(b)).filter((b): b is Record<string, unknown> => b !== null);
+}
+
+function toolUseIds(record: Record<string, unknown> | null): Set<string> {
+  const ids = contentBlocks(record)
+    .filter((b) => str(b.type) === 'tool_use')
+    .map((b) => str(b.id))
+    .filter((id): id is string => id !== null);
+  return new Set(ids);
+}
+
+function toolResultIds(record: Record<string, unknown> | null): string[] {
+  return contentBlocks(record)
+    .filter((b) => str(b.type) === 'tool_result')
+    .map((b) => str(b.tool_use_id))
+    .filter((id): id is string => id !== null);
 }
 
 function parseShow(argv: string[]): { target: string; context: number } {
@@ -102,31 +143,47 @@ function ambiguous(id: string, sessions: string[]): string {
   return `${id} exists in ${sessions.length} sessions: ${forms} — name one by its prefix`;
 }
 
-function render(target: string, spot: Spot, context: number, records: ArchivedMessage[]): string {
+function render(
+  target: string,
+  spot: Spot,
+  context: number,
+  records: ArchivedMessage[],
+  resultTurns: number[],
+): string {
   const what = spot.anchor === null ? '' : `${spot.anchor.type} anchor, `;
   const window = context === 0 ? '' : `, ±${plural(context, 'turn')}`;
   const heading =
-    `## show ${target} — ${what}session ${spot.sessionId}, cycle ${spot.cycle}, turn ${spot.turn}${window}\n`;
-  return `${heading}${fitWindow(records, spot.turn, OUTPUT_TOKENS * TOKEN_CHARS)}`;
+    `## show ${target} — ${what}session ${spot.sessionId}, cycle ${spot.cycle}, turn ${spot.turn}` +
+    `${window}${resultsSuffix(resultTurns)}\n`;
+  return `${heading}${fitWindow(records, spot.turn, OUTPUT_TOKENS * TOKEN_CHARS, resultTurns)}`;
 }
 
-// The target record is allocated before its context, and truncated rather than dropped. A listing
-// can lose a line and still answer; a `seb show` that omits the record it was asked for answers
-// nothing. Context records are individually retrievable by position, so dropping one whole and
-// pointing at it stays honest — the target has no other way out.
-export function fitWindow(records: ArchivedMessage[], targetTurn: number, room: number): string {
-  const target = records.find((m) => m.turn === targetTurn);
-  const others = records.filter((m) => m.turn !== targetTurn);
-  // The footer's room is reserved before the target is allocated, so a target that fills the
-  // budget can still report what it displaced.
+function resultsSuffix(turns: number[]): string {
+  if (turns.length === 0) return '';
+  if (turns.length === 1) return `, with its result at turn ${turns[0]}`;
+  return `, with its results at turns ${turns.join(', ')}`;
+}
+
+// The target record and the results that answered it are allocated before context, and truncated
+// rather than dropped. A listing can lose a line and still answer; a `seb show` that omits the
+// record it was asked for, or the result the reader came for, answers nothing. Context records are
+// individually retrievable by position, so dropping one whole and pointing at it stays honest.
+export function fitWindow(
+  records: ArchivedMessage[],
+  targetTurn: number,
+  room: number,
+  resultTurns: number[] = [],
+): string {
+  const target = records.filter((m) => m.turn === targetTurn);
+  const results = records
+    .filter((m) => m.turn !== targetTurn && resultTurns.includes(m.turn))
+    .sort((a, b) => a.turn - b.turn);
+  const others = records.filter((m) => m.turn !== targetTurn && !resultTurns.includes(m.turn));
+  // The footer's room is reserved before anything is allocated, so a target that fills the budget
+  // can still report what it displaced.
   const budget = room - (others.length === 0 ? 0 : omitted(others.length).length);
-  const blocks: { turn: number; text: string }[] = [];
-  let left = budget;
-  if (target !== undefined) {
-    const text = targetBlock(target, budget);
-    blocks.push({ turn: target.turn, text });
-    left -= text.length;
-  }
+  const { blocks, left: afterPrimaries } = allocatePrimaries([...target, ...results], budget);
+  let left = afterPrimaries;
   // Nearest first, ties toward the earlier turn. A record too large for what is left is skipped
   // rather than ending the scan, so one bulky neighbour cannot hide the small ones behind it.
   let dropped = 0;
@@ -141,6 +198,22 @@ export function fitWindow(records: ArchivedMessage[], targetTurn: number, room: 
   }
   const body = blocks.sort((a, b) => a.turn - b.turn).map((b) => b.text).join('');
   return dropped === 0 ? body : `${body}${omitted(dropped)}`;
+}
+
+// Each primary record takes what it needs up to an equal share of what is left, target first, so a
+// short call leaves its room to the long result that answered it.
+function allocatePrimaries(
+  primaries: ArchivedMessage[],
+  budget: number,
+): { blocks: { turn: number; text: string }[]; left: number } {
+  const blocks: { turn: number; text: string }[] = [];
+  let left = budget;
+  primaries.forEach((m, i) => {
+    const text = targetBlock(m, Math.floor(left / (primaries.length - i)));
+    blocks.push({ turn: m.turn, text });
+    left -= text.length;
+  });
+  return { blocks, left };
 }
 
 function byDistance(target: number): (a: ArchivedMessage, b: ArchivedMessage) => number {

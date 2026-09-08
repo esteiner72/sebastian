@@ -62,16 +62,16 @@ function seedVerdicts(db: DatabaseSync): void {
 // ordering, and the directive phrasing that the aggregate cannot name when it moves.
 
 describe('computeSteering', () => {
-  it('emits the four base lines alone from a database holding no verdicts, so the first compaction of a project cannot print a rate divided by zero observations', () => {
+  it('emits the five base lines alone from a database holding no verdicts, so the first compaction of a project cannot print a rate divided by zero observations', () => {
     const db = tempDb();
-    expect(computeSteering(db)).toBe(golden('steering-base.txt'));
+    expect(computeSteering(db, 0)).toBe(golden('steering-base.txt'));
     db.close();
   });
 
   it('earns a line only above a 0.5 drop-rate with at least 5 reconciled anchors, so an exactly-half type, a four-anchor sweep, and a total cmd sweep all stay silent', () => {
     const db = tempDb();
     seedVerdicts(db);
-    expect(computeSteering(db)).toBe(golden('steering-droprate.txt'));
+    expect(computeSteering(db, 0)).toBe(golden('steering-droprate.txt'));
     db.close();
   });
 
@@ -92,7 +92,7 @@ describe('computeSteering', () => {
     logTelemetry(db, { cmd: 'show', anchorType: 'read', hits: 1 });
     logTelemetry(db, { cmd: 'status', hits: 0 });
 
-    expect(computeSteering(db)).toBe(golden('steering-retrieval.txt'));
+    expect(computeSteering(db, 0)).toBe(golden('steering-retrieval.txt'));
     db.close();
   });
 });

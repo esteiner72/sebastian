@@ -71,7 +71,7 @@ answer against the summary, and retrieve only what the summary is missing.
 
 | Command | What it does |
 | --- | --- |
-| `seb search <query>` | Search the archive by keyword. Flags: `--type`, `--cycle`, `--session`, `--turn A:B`, `--limit` |
+| `seb search <query>` | Search record bodies, including command output and file contents the model saw. Word forms match: `seed` finds `seeds`. Flags: `--type`, `--cycle`, `--session`, `--turn A:B`, `--limit` |
 | `seb show <id>` | Print the original record. `<id>` is an anchor id or `cycle:turn`. `--context N` adds neighbouring turns |
 | `seb index` | Print the current Forgotten Index. `--dropped` and `--all` list every anchor, `--raw` adds match scores |
 | `seb timeline` | Map the turns of a cycle. `--cycle N` narrows it |
@@ -79,6 +79,9 @@ answer against the summary, and retrieve only what the summary is missing.
 | `seb log` | Show what the hooks did and when. Diagnoses the loop; it retrieves no dropped content. Flags: `--hook`, `--level info\|warn\|error`, `--limit` |
 | `seb report` | Print a JSON summary of the loop's own behaviour. For the maintainer, not for retrieval: it holds counts and timestamps, never archived content |
 | `seb reconcile` | Judge any compaction whose bookkeeping did not finish, so its index becomes available. The loop does this itself at the next compaction; run it to avoid waiting |
+
+One `seb search` reaches text that a script over the transcript file needs a parser to find, and it
+works after the transcript file has been cleaned up.
 
 Search covers the whole project, not only this session, so it finds work from a session whose id you
 do not know. Every retrieval command caps its output and tells you how to narrow the result.

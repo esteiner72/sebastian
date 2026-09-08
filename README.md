@@ -106,7 +106,7 @@ yourself, the setup script links it globally where it can; if that did not happe
 
 | Command | Purpose |
 | --- | --- |
-| `seb search <query>` | Find archived content by keyword, type, cycle, or turn range |
+| `seb search <query>` | Search everything archived: what you said, what the model said and ran, and what came back |
 | `seb show <id>` | Print the full original record, with surrounding turns |
 | `seb index` | Show the current Forgotten Index |
 | `seb timeline` | Show the turn map for a cycle |
@@ -127,12 +127,12 @@ hooks write it and the `seb` commands read it. It holds six tables.
 
 | Table | What it holds |
 | --- | --- |
-| `messages` | Every archived transcript record, keyed by uuid, with its session, cycle, and turn |
+| `messages` | Every archived transcript record, keyed by uuid, with its session, cycle, and turn, and its extracted text |
 | `anchors` | The identifiers and excerpts extracted from those records, with the verdict and score each received at reconciliation |
 | `cycles` | One row per compaction: trigger, summary, token counts, when it was reconciled and injected, and what injection cost, including the one-line note printed when the next compaction starts |
 | `pending` | Compactions PostCompact observed but could not close, because Claude Code writes the `compact_boundary` record only after that hook exits |
 | `log` | One row per hook invocation carrying its duration, plus whatever each hook body reported |
-| `telemetry` | One row per `seb` command run, with what it searched for and how many anchors it hit |
+| `telemetry` | One row per `seb` command run, with what it searched for and how many records it hit |
 
 `seb log` reads the `log` table and its output stays on your machine, because hook messages can
 contain absolute transcript paths. `seb report` excludes the log for the same reason. A question that

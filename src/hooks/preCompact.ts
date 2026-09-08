@@ -3,7 +3,9 @@ import { archiveDelta, logEvent } from '../store/db.js';
 import { logCatchUp } from '../reconcile/cycle.js';
 import { computeSteering } from '../steer/adapt.js';
 import { extractAnchors } from '../transcript/anchors.js';
-import { parseTranscript, transcriptSession, type TranscriptEvent } from '../transcript/parse.js';
+import {
+  parseTranscript, readBoundaries, transcriptSession, type TranscriptEvent,
+} from '../transcript/parse.js';
 import { str } from '../transcript/text.js';
 import { resolveTranscript, type Payload } from './runHook.js';
 
@@ -26,7 +28,7 @@ export function preCompact(db: DatabaseSync, payload: Payload): string {
   const path = resolveTranscript(payload);
   if (path === null) {
     logEvent(db, 'pre-compact', 'warn', 'no transcript to archive; steering only');
-    return withPrecedence(computeSteering(db), payload);
+    return withPrecedence(computeSteering(db, null), payload);
   }
   const events = parseTranscript(path);
   recover(db, events, str(payload.session_id) ?? transcriptSession(events));
@@ -37,7 +39,8 @@ export function preCompact(db: DatabaseSync, payload: Payload): string {
     'info',
     `archived ${counts.messages} messages and ${counts.anchors} anchors from ${path}`,
   );
-  return withPrecedence(computeSteering(db), payload);
+  // The boundaries already on disk number the cycle this compaction is about to create.
+  return withPrecedence(computeSteering(db, readBoundaries(events).length), payload);
 }
 
 function recover(db: DatabaseSync, events: TranscriptEvent[], sessionId: string | null): void {

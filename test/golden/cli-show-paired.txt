@@ -1,0 +1,5 @@
+## show t3c1 — cmd anchor, session fix-seven, cycle 0, turn 3, with its result at turn 4
+turn 3  assistant  2026-08-30T10:00:10.000Z
+{"type":"assistant","uuid":"a3","sessionId":"fix-seven","timestamp":"2026-08-30T10:00:10.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_e1","name":"Edit","input":{"file_path":"/repo/src/sync/retry.ts","old_string":"reuseDeadline()","new_string":"resetTimer()"}},{"type":"tool_use","id":"toolu_b1","name":"Bash","input":{"command":"npm test"}}]}}
+turn 4  user  2026-08-30T10:00:20.000Z
+{"type":"user","uuid":"u4","sessionId":"fix-seven","timestamp":"2026-08-30T10:00:20.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b1","content":"Exit code 1\nTypeError: Cannot read properties of undefined (reading 'reset')\n    at retrySync (/repo/src/sync/retry.ts:14:3)","is_error":true}]}}

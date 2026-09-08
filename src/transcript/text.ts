@@ -94,19 +94,64 @@ export function genuineUserText(event: TranscriptEvent): string | null {
   if (record.isCompactSummary === true || record.isMeta === true) return null;
   if (record.isVisibleInTranscriptOnly === true) return null;
   const content = obj(record.message)?.content;
-  const text = messageText(content);
+  const text = typedText(content);
   if (text === null) return null;
   const stripped = stripEnvelopes(text);
   return stripped === '' ? null : stripped;
 }
 
-function messageText(content: unknown): string | null {
+function typedText(content: unknown): string | null {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return null;
   const blocks = content.map((b) => obj(b));
   if (blocks.some((b) => str(b?.type) === 'tool_result')) return null;
   const texts = blocks.filter((b) => str(b?.type) === 'text').map((b) => str(b?.text) ?? '');
   return texts.join('\n');
+}
+
+// What a record said or saw, for the message index and its snippets: typed text, the string inputs
+// of every tool call, and every tool result, one block per line. Thinking blocks are skipped: they
+// are neither what the user saw nor what the model committed to, and they are often redacted. A
+// record with no message is a system record, whose `content` is the whole of what it said.
+export function messageText(record: Record<string, unknown> | null): string {
+  if (record === null) return '';
+  const message = obj(record.message);
+  if (message === null) return str(record.content) ?? '';
+  const content = message.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((b) => obj(b))
+    .filter((b): b is Record<string, unknown> => b !== null)
+    .map(contentBlockText)
+    .filter((t) => t !== '')
+    .join('\n');
+}
+
+function contentBlockText(block: Record<string, unknown>): string {
+  switch (str(block.type)) {
+    case 'text':
+      return str(block.text) ?? '';
+    case 'tool_use':
+      return Object.values(obj(block.input) ?? {})
+        .filter((v): v is string => typeof v === 'string')
+        .join('\n');
+    case 'tool_result':
+      return blockText(block);
+    default:
+      return '';
+  }
+}
+
+// A tool result's body: a string `content` as it is, an array `content` as its text blocks joined.
+export function blockText(block: Record<string, unknown>): string {
+  const content = block.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((b) => str(obj(b)?.text) ?? '')
+    .filter((t) => t !== '')
+    .join('\n');
 }
 
 // Sentence scoring for the user-anchor quote cut: real decisions appear mid-message, so the

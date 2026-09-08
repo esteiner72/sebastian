@@ -1,7 +1,7 @@
 import type { TranscriptEvent } from './parse.js';
 import { extractErrorSignatures } from './errors.js';
 import {
-  contentTokens, genuineUserText, isQuestion, obj, questionKey, selectQuote, str,
+  blockText, contentTokens, genuineUserText, isQuestion, obj, questionKey, selectQuote, str,
 } from './text.js';
 
 export type AnchorType = 'error' | 'answer' | 'edit' | 'user' | 'cmd' | 'read' | 'url';
@@ -66,7 +66,7 @@ function indexToolResults(events: TranscriptEvent[]): Map<string, string> {
   for (const event of events) {
     for (const block of toolResultBlocks(event)) {
       const id = str(block.tool_use_id);
-      if (id !== null) bodies.set(id, blockBody(block));
+      if (id !== null) bodies.set(id, blockText(block));
     }
   }
   return bodies;
@@ -79,16 +79,6 @@ function toolResultBlocks(event: TranscriptEvent): Record<string, unknown>[] {
   return content
     .map((b) => obj(b))
     .filter((b): b is Record<string, unknown> => b !== null && str(b.type) === 'tool_result');
-}
-
-function blockBody(block: Record<string, unknown>): string {
-  const content = block.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((b) => str(obj(b)?.text) ?? '')
-    .filter((t) => t !== '')
-    .join('\n');
 }
 
 function scanAssistant(
@@ -170,7 +160,7 @@ function pushErrorAnchors(
 ): void {
   if (event.uuid === null) return;
   for (const block of blocks) {
-    for (const sig of extractErrorSignatures(blockBody(block), block.is_error === true)) {
+    for (const sig of extractErrorSignatures(blockText(block), block.is_error === true)) {
       drafts.push({ ...draftBase(event, 'error'), key: sig.key, excerpt: sig.excerpt });
     }
   }

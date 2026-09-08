@@ -5,12 +5,31 @@ import type { AnchorType } from '../transcript/anchors.js';
 // The summarizer attributes that stdout to the user, so every line reads as a directive about the
 // summary ("keep error signatures verbatim") and never as a request ("please include …"), which
 // would re-enter the summary as something the user asked for.
-const BASE = [
-  '## Compact Instructions',
-  '- Preserve verbatim: file paths edited, error signatures, commands run, user decisions.',
-  '- Prefer dropping prose over dropping identifiers; write "[archived: turn N]" where you drop detail.',
-  '- A Forgotten Index of dropped content will be injected; do not re-summarize archived material.',
-];
+//
+// Every summary the platform produces ends by pointing the reader at the transcript file, so the
+// summary itself has to name `seb` or the archive is never the first stop. The marker names the
+// cycle this compaction creates when the caller knows it, so a reader can retrieve a dropped turn
+// with the handle as written.
+function baseLines(cycle: number | null): string[] {
+  return [
+    '## Compact Instructions',
+    '- Preserve verbatim: file paths edited, error signatures, commands run, user decisions.',
+    markerLine(cycle),
+    '- State once, at the top of the summary, that dropped detail is searchable with ' +
+      '`seb search <words>`; the transcript file is the fallback, not the first stop.',
+    '- A Forgotten Index of dropped content will be injected; do not re-summarize archived material.',
+  ];
+}
+
+function markerLine(cycle: number | null): string {
+  if (cycle === null) {
+    return '- Prefer dropping prose over dropping identifiers; write "[archived: turn N]" where you drop detail.';
+  }
+  return (
+    '- Prefer dropping prose over dropping identifiers; where you drop detail, write ' +
+    `"[archived: seb show ${cycle}:N]" with N the turn, so the reader can retrieve it.`
+  );
+}
 
 // A type earns an adaptive line only above this drop-rate, and only once enough of its anchors
 // carry a verdict for the rate to mean anything. Unreconciled anchors are outside both counts.
@@ -40,12 +59,13 @@ interface TypeRate {
   rate: number;
 }
 
-// Templates only, no model call: the same database state always prints the same block. A database
-// with no verdicts yet prints the base lines alone.
-export function computeSteering(db: DatabaseSync): string {
+// Templates only, no model call: the same database state and cycle always print the same block. A
+// database with no verdicts yet prints the base lines alone. `cycle` is the one this compaction
+// creates, or null on a path with no transcript to count boundaries in.
+export function computeSteering(db: DatabaseSync, cycle: number | null): string {
   const retrievals = countRetrievals(db);
   const adaptive = earnedRates(db).map((r) => adaptiveLine(r, retrievals.get(r.type) ?? 0));
-  return `${[...BASE, ...adaptive].join('\n')}\n`;
+  return `${[...baseLines(cycle), ...adaptive].join('\n')}\n`;
 }
 
 // Drop-rate is the primary signal and is dense: every anchor of every type takes a verdict every

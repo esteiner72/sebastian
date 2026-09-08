@@ -125,6 +125,16 @@ describe('cli rendering', () => {
     db.close();
   });
 
+  // One wrong word in a two-word query finds nothing under AND. The OR page is the six records the
+  // right word reaches, under a heading that says the match is partial, so a reader corrects the
+  // query instead of concluding the archive is empty.
+  it('answers a query with one wrong word by the records that match the rest, and says so, so one imprecise query is not read as an empty archive', () => {
+    const db = tempDb('seb-cli-fallback-');
+    archiveFixture(db, FIXTURE);
+    expect(search(db, ['retry', 'nonexistentword'])).toBe(golden('cli-search-fallback.txt'));
+    db.close();
+  });
+
   it('lists every dropped anchor with its score, including the types the injected index never spends tokens on', () => {
     const db = tempDb('seb-cli-index-');
     archiveFixture(db, FIXTURE);
@@ -166,13 +176,13 @@ describe('cli rendering', () => {
     const db = tempDb('seb-cli-limit-');
     archiveFixture(db, FIXTURE);
     const page = search(db, ['retry', '--limit', '2']);
-    expect(page).toContain('2 of 6 anchors for "retry" — showing the 2 best matches.\n');
+    expect(page).toContain('2 of 6 hits for "retry" — showing the 2 best matches.\n');
     expect(page).toContain('Raise --limit or narrow with --type, --cycle or --turn to see the rest.\n');
 
     // An unsaturated page says nothing about limits at all; `cli-search.txt` pins that in full.
     expect(search(db, ['retry'])).toBe(golden('cli-search.txt'));
 
-    // `--limit 0` reached the store as `LIMIT 0` and answered "no anchors match" over six of them.
+    // `--limit 0` reached the store as `LIMIT 0` and answered "no records match" over six of them.
     expect(() => search(db, ['retry', '--limit', '0'])).toThrow(
       '--limit takes a whole number of results, at least 1',
     );
@@ -200,6 +210,18 @@ describe('cli rendering', () => {
 });
 
 describe('cli retrieval', () => {
+  // Turn 3 calls two tools; only `npm test` has an archived answer, and it sits at turn 4. Live, the
+  // gap is six turns of uuid-less records, so a reader who found the command by its anchor would
+  // otherwise have to guess a --context that reaches it.
+  it('shows the tool result that answered a tool call beside the call, so a reader who found the command by its anchor does not guess at --context', () => {
+    const db = tempDb('seb-cli-paired-');
+    archiveFixture(db, FIXTURE);
+    expect(show(db, ['t3c1'])).toBe(golden('cli-show-paired.txt'));
+    // A record that called no tool, and a call whose result is not archived, print as before.
+    expect(show(db, ['t7u1'])).not.toContain('with its result');
+    db.close();
+  });
+
   // The round trip the whole archive exists for: find an anchor by words the summary lost, then
   // get the original line back unchanged. Telemetry is the second half — `computeSteering` counts
   // search and show rows with hits above zero, so a command that miscounts its own results
@@ -209,7 +231,7 @@ describe('cli retrieval', () => {
     archiveFixture(db, FIXTURE);
     const lines = readFileSync(FIXTURE, 'utf8').split('\n');
 
-    expect(search(db, ['exponential', 'backoff'])).toContain('t7u1 user c0 — Keep the exponential');
+    expect(search(db, ['exponential', 'backoff'])).toContain('0:7 user (t7u1) — Keep the exponential');
     const shown = show(db, ['t7u1', '--context', '1']);
     expect(shown).toContain(`turn 7  user  2026-08-30T10:00:40.000Z\n${lines[7]}\n`);
     expect(shown).toContain(lines[6]);
@@ -217,7 +239,7 @@ describe('cli retrieval', () => {
 
     // A search that found nothing must log a zero, or a miss reads as a recovery.
     expect(search(db, ['nonexistentterm', '--type', 'error'])).toBe(
-      'No anchors match "nonexistentterm".\n',
+      'No records match "nonexistentterm".\n',
     );
 
     const rows = db

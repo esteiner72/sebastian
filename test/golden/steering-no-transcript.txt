@@ -1,0 +1,5 @@
+## Compact Instructions
+- Preserve verbatim: file paths edited, error signatures, commands run, user decisions.
+- Prefer dropping prose over dropping identifiers; write "[archived: turn N]" where you drop detail.
+- State once, at the top of the summary, that dropped detail is searchable with `seb search <words>`; the transcript file is the fallback, not the first stop.
+- A Forgotten Index of dropped content will be injected; do not re-summarize archived material.

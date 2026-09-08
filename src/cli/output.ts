@@ -51,3 +51,38 @@ export function anchorLine(a: Anchor, qualified: boolean, suffix = ''): string {
 export function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
+
+// The window of a hit's text that a listing shows: it opens shortly before the first query token,
+// runs past it, and slides left to fill itself, so a text shorter than the window renders whole.
+// Each edge moves to the nearest whitespace within a short slack, so the window opens and closes on
+// a word without a long unbroken token, a URL or a JSON run, costing most of it. Whitespace collapses
+// to single spaces. Computed here rather than by FTS5's snippet(), so a golden can be derived by hand.
+export function snippetAround(text: string, tokens: string[], before = 60, after = 200): string {
+  const idx = firstMatch(text.toLowerCase(), tokens.map((t) => t.toLowerCase()));
+  const start = openOnWord(text, Math.max(0, Math.min(idx - before, text.length - (before + after))));
+  const cut = idx + after < text.length;
+  const end = cut ? closeOnWord(text, idx + after) : text.length;
+  const window = text.slice(start, end).replaceAll(/\s+/g, ' ').trim();
+  return `${start > 0 ? '…' : ''}${window}${cut ? '…' : ''}`;
+}
+
+const WORD_SLACK = 40;
+
+// FTS5 can match through diacritic folding where a plain substring search does not, and then the
+// window opens at the start of the text.
+function firstMatch(lower: string, tokens: string[]): number {
+  const found = tokens.map((t) => lower.indexOf(t)).filter((i) => i !== -1);
+  return found.length === 0 ? 0 : Math.min(...found);
+}
+
+function openOnWord(text: string, start: number): number {
+  if (start === 0) return 0;
+  const space = text.slice(start, start + WORD_SLACK).search(/\s/);
+  return space === -1 ? start : start + space + 1;
+}
+
+function closeOnWord(text: string, end: number): number {
+  const from = Math.max(0, end - WORD_SLACK);
+  const space = text.slice(from, end + 1).search(/\s\S*$/);
+  return space === -1 ? end : from + space;
+}

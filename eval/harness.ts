@@ -9,7 +9,7 @@ import { postCompact } from '../src/hooks/postCompact.js';
 import { preCompact } from '../src/hooks/preCompact.js';
 import { sessionStart } from '../src/hooks/sessionStart.js';
 import { userPromptSubmit } from '../src/hooks/userPromptSubmit.js';
-import { archiveDelta, openDbAt, searchAnchors } from '../src/store/db.js';
+import { archiveDelta, openDbAt, searchMessages } from '../src/store/db.js';
 import { extractAnchors, type Anchor } from '../src/transcript/anchors.js';
 import {
   parseTranscript, readBoundaries, toEvent, type Boundary, type TranscriptEvent,
@@ -274,7 +274,7 @@ function timeSearches(db: DatabaseSync, anchors: Anchor[], needed: Set<string>):
     .map((a) => contentTokens(a.key).slice(0, 3).join(' '))
     .filter((q) => q !== '');
   if (queries.length === 0) queries.push('sebastian');
-  return queries.map((query) => timeMs(() => searchAnchors(db, query)));
+  return queries.map((query) => timeMs(() => searchMessages(db, query)));
 }
 
 function timeMs(fn: () => unknown): number {
@@ -309,8 +309,9 @@ function growArchive(db: DatabaseSync, from: number, to: number): void {
   const anchors: Anchor[] = [];
   for (let i = from; i < to; i += 1) {
     const uuid = `scale-${String(i)}`;
-    events.push(toEvent(i, 0, JSON.stringify({ uuid, sessionId: 'scale', type: 'assistant' })));
     const key = i < 10 ? `sebmark needle ${String(i)}` : `src/scale/file-${String(i)}.ts token${String(i % 997)}`;
+    const record = { uuid, sessionId: 'scale', type: 'assistant', message: { role: 'assistant', content: key } };
+    events.push(toEvent(i, 0, JSON.stringify(record)));
     anchors.push({ id: `t${String(i)}r1`, uuid, sessionId: 'scale', cycle: 0, turn: i, type: 'read', key, excerpt: key });
   }
   archiveDelta(db, events, anchors);
@@ -318,7 +319,7 @@ function growArchive(db: DatabaseSync, from: number, to: number): void {
 
 function medianSearchMs(db: DatabaseSync): number {
   const times: number[] = [];
-  for (let run = 0; run < 15; run += 1) times.push(timeMs(() => searchAnchors(db, 'sebmark')));
+  for (let run = 0; run < 15; run += 1) times.push(timeMs(() => searchMessages(db, 'sebmark')));
   const sorted = times.sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)] ?? 0;
 }

@@ -61,7 +61,7 @@ export function toEvent(turn: number, cycle: number, raw: string): TranscriptEve
   };
 }
 
-function parseLine(line: string): Record<string, unknown> | null {
+export function parseLine(line: string): Record<string, unknown> | null {
   try {
     return obj(JSON.parse(line));
   } catch {
