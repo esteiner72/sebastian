@@ -29,3 +29,6 @@ docs/specs/
 
 # Real eval corpus, kept outside the repo
 eval/corpus-local/
+
+# Field data mining scripts and their output, kept local
+scripts/field/
