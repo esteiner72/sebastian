@@ -31,21 +31,28 @@ function footer(omitted: number, hint: string): string {
   return `… ${omitted} more — refine with ${hint}.\n`;
 }
 
-// Ids are session-local, so a result set drawn from two sessions carries two `t41e1`s. The 8-
-// character session prefix disambiguates them for a reader, and `seb show` accepts it back — but
-// it is display only, and a single-session result set never pays for it.
-export function spansSessions(anchors: { sessionId: string }[]): boolean {
-  return new Set(anchors.map((a) => a.sessionId)).size > 1;
-}
-
-export function displayId(sessionId: string, id: string, qualified: boolean): string {
-  return qualified ? `${sessionId.slice(0, 8)}/${id}` : id;
+// Ids and positions are session-local. Every reference a command prints carries the 8-character
+// session prefix, which `seb show` accepts back. A bare reference resolves to the calling session
+// first, so a bare one printed for another session could open the wrong record.
+export function qualifiedRef(sessionId: string, ref: string): string {
+  return `${sessionId.slice(0, 8)}/${ref}`;
 }
 
 // One anchor, one line: what it is, which cycle lost it, and enough of its content to judge
 // whether it is worth retrieving. The turn is already in the id, so only the cycle is spelled out.
-export function anchorLine(a: Anchor, qualified: boolean, suffix = ''): string {
-  return `${displayId(a.sessionId, a.id, qualified)} ${a.type} c${a.cycle}${suffix} — ${anchorDisplay(a)}`;
+export function anchorLine(a: Anchor, suffix = ''): string {
+  return `${qualifiedRef(a.sessionId, a.id)} ${a.type} c${a.cycle}${suffix} — ${anchorDisplay(a)}`;
+}
+
+// The sessions a counts line or an error names before it summarizes the rest as "and N more".
+const SESSIONS_LISTED = 10;
+
+// The first `max` items, then a count of the rest, so a list drawn from a large archive cannot
+// flood the reader's context.
+export function listSome(items: string[], max: number = SESSIONS_LISTED): string {
+  const more = items.length - max;
+  const listed = items.slice(0, max).join(', ');
+  return more > 0 ? `${listed}, and ${more} more` : listed;
 }
 
 export function plural(n: number, word: string): string {

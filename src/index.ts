@@ -31,8 +31,8 @@ export type HookName = keyof typeof HOOKS;
 
 // A command reads the project database and returns the text to print. Commands run from a shell,
 // not from a hook, so they may exit non-zero — a mistyped flag or an id that is not archived is
-// worth saying out loud.
-type Command = (db: DatabaseSync, argv: string[]) => string;
+// worth saying out loud. `caller` is the session that ran the command, when there is one.
+type Command = (db: DatabaseSync, argv: string[], caller: string | undefined) => string;
 
 const COMMANDS: Record<string, Command> = {
   search,
@@ -47,8 +47,8 @@ const COMMANDS: Record<string, Command> = {
 
 const USAGE = [
   'usage:',
-  '  seb search <query> [--type error|answer|edit|user|cmd|read|url] [--cycle N] [--session ID] [--turn A:B] [--limit N]',
-  '  seb show <anchor-id | cycle:turn> [--context N]',
+  '  seb search <query> [--type error|answer|edit|user|cmd|read|url|assistant] [--cycle N|ID|ID/N] [--session ID] [--turn A:B] [--limit N]',
+  '  seb show <ref> [--context N] [--page N]',
   '  seb index [--dropped|--all|--raw]',
   '  seb timeline [--cycle N]',
   '  seb status',
@@ -108,13 +108,20 @@ function runCommand(name: string | undefined, argv: string[]): number {
   return runAgainst(slug, name ?? '', run, argv);
 }
 
+// Claude Code sets this in every Bash command a session runs, to the id that names its transcript.
+// A person at a plain terminal has none.
+function callerSession(): string | undefined {
+  const id = process.env.CLAUDE_CODE_SESSION_ID;
+  return id === undefined || id === '' ? undefined : id;
+}
+
 // The command's own duration, measured around the whole invocation and stamped onto the telemetry
 // rows this invocation wrote.
 function runAgainst(slug: string, name: string, run: Command, argv: string[]): number {
   const db = openDb(slug);
   const started = performance.now();
   try {
-    process.stdout.write(run(db, argv));
+    process.stdout.write(run(db, argv, callerSession()));
     stampCommandMs(db, Math.round(performance.now() - started));
     return 0;
   } catch (err) {

@@ -46,7 +46,7 @@ Run `seb index --dropped` for the full list; `seb show 344e260c/<id>` retrieves 
 The id encodes turn, type, and position, so `t41e1` is the first error of turn 41. Ids restart in
 every session, so an archive holding several sessions can hold the same id more than once. Use the
 prefixed form from the footer, `seb show 344e260c/t41e1`; it always resolves. The bare id resolves
-only while one session holds it.
+to your own session first, and to another session only when exactly one holds it.
 
 Types are `error`, `answer`, `edit`, `user`, `cmd`, `read`, and `url`. An `answer` anchor points at
 an explanation you gave earlier, which is the class compaction destroys first.
@@ -71,8 +71,8 @@ answer against the summary, and retrieve only what the summary is missing.
 
 | Command | What it does |
 | --- | --- |
-| `seb search <query>` | Search record bodies, including command output and file contents the model saw. Word forms match: `seed` finds `seeds`. Flags: `--type`, `--cycle`, `--session`, `--turn A:B`, `--limit` |
-| `seb show <id>` | Print the original record. `<id>` is an anchor id or `cycle:turn`. `--context N` adds neighbouring turns |
+| `seb search <query>` | Search record bodies, including command output and file contents the model saw. Word forms match: `seed` finds `seeds`. Your session's hits come first. Flags: `--type` (`assistant` matches everything you wrote), `--cycle` (also takes a session prefix), `--session`, `--turn A:B`, `--limit` |
+| `seb show <ref>` | Print a record as readable text, with the tool result that answered it. `<ref>` is a reference from search, such as `344e260c/2:41`, or an anchor id. `--context N` adds neighbouring turns, and `--page N` reads on through a large record |
 | `seb index` | Print the current Forgotten Index. `--dropped` and `--all` list every anchor, `--raw` adds match scores |
 | `seb timeline` | Map the turns of a cycle. `--cycle N` narrows it |
 | `seb status` | Report cycles, archive size, and the steering in force |
@@ -83,8 +83,14 @@ answer against the summary, and retrieve only what the summary is missing.
 One `seb search` reaches text that a script over the transcript file needs a parser to find, and it
 works after the transcript file has been cleaned up.
 
-Search covers the whole project, not only this session, so it finds work from a session whose id you
-do not know. Every retrieval command caps its output and tells you how to narrow the result.
+Search covers the whole project, so it finds work from a session whose id you do not know. Hits
+from your own session print first, and the first line counts the hits in every other session. When
+no record holds every word of a query, search counts each word on its own; drop the words with few
+or no records and search again.
+
+Every reference a command prints starts with its session prefix, such as `344e260c/2:41`, and you
+can pass it straight to `seb show`. A reference without a prefix means your own session. Every
+retrieval command caps its output and tells you how to narrow the result.
 
 The archive is a SQLite database at `~/.claude/sebastian/<project-slug>/sebastian.db`, holding six
 tables: `messages`, `anchors`, `cycles`, `pending`, `log`, and `telemetry`. A question no command
@@ -101,7 +107,7 @@ open". You need the exact failure to fix it, and the summary does not carry it:
 node "${CLAUDE_PLUGIN_ROOT}/dist/index.js" show t41e1 --context 2
 ```
 
-That prints the original tool result and the two turns on either side. If you need every place the
+That prints the tool result as text, with the two turns on either side. If you need every place the
 same failure appeared:
 
 ```bash

@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseLine, type TranscriptEvent } from '../transcript/parse.js';
 import type { Anchor, AnchorType } from '../transcript/anchors.js';
-import { messageText } from '../transcript/text.js';
+import { messageText, sebCallIds } from '../transcript/text.js';
+import { cleanIndex } from './clean.js';
 import type { Verdict } from '../reconcile/reconcile.js';
 
 // Matches Claude Code's own project-directory slug: every non-alphanumeric byte becomes a dash.
@@ -46,6 +47,7 @@ export function openDbAt(path: string): DatabaseSync {
   db.exec(schema);
   migrateColumns(db);
   migrateMessageIndex(db, schema);
+  cleanIndex(db);
   chmodSync(path, 0o600);
   return db;
 }
@@ -128,7 +130,8 @@ interface ArchiveStatements {
 // One transaction per delta. Message dedupe rides the uuid primary key, anchor dedupe rides
 // (session_id, id), both via INSERT OR IGNORE. A message's index row is written only when its base
 // insert actually added a row and is keyed on that row's rowid, so re-archiving the same delta
-// leaves the index untouched. Messages go first: anchors carry a foreign key into them.
+// leaves the index untouched. Messages go first: anchors carry a foreign key into them. Sebastian's
+// own retrieval calls in the delta, and the results that answer them, are archived with no text.
 //
 // The two lists are derived independently — anchor extraction needs whole-file context for turn
 // numbering and pending-question state, while a hook archives only a delta — so an anchor can name
@@ -151,10 +154,11 @@ export function archiveDelta(
         'SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM messages WHERE uuid = ?)',
     ),
   };
+  const skip = sebCallIds(events.map((e) => e.record));
   db.exec('BEGIN');
   try {
     const counts = {
-      messages: events.reduce((n, e) => n + insertMessage(stmts, e), 0),
+      messages: events.reduce((n, e) => n + insertMessage(stmts, e, skip), 0),
       anchors: anchors.reduce((n, a) => n + insertAnchor(stmts, a), 0),
     };
     db.exec('COMMIT');
@@ -171,9 +175,9 @@ export function archiveDelta(
 // accepts unlimited NULLs in a TEXT primary key, so storing them would append the whole population
 // again on every re-archive, to the base table and to the FTS index alike. A crash-torn line also
 // parses without a uuid, and takes the same path.
-function insertMessage(stmts: ArchiveStatements, e: TranscriptEvent): number {
+function insertMessage(stmts: ArchiveStatements, e: TranscriptEvent, skip: ReadonlySet<string>): number {
   if (e.uuid === null) return 0;
-  const text = messageText(e.record);
+  const text = messageText(e.record, skip);
   const result = stmts.message.run(
     e.uuid, e.sessionId ?? '', e.cycle, e.turn, e.ts, e.role, e.raw, text,
   );
@@ -195,8 +199,9 @@ export interface SearchFilters {
   cycle?: number;
   sessionId?: string;
   turnRange?: { from: number; to: number };
+  excludeSessionId?: string;  // every session but this one
+  role?: string;              // who wrote the record: 'user' or 'assistant'
   limit?: number;
-  match?: 'all' | 'any';      // the query's tokens combine as AND (the default) or as OR
 }
 
 export interface MessageHit {
@@ -235,13 +240,23 @@ export function searchMessages(
   }));
 }
 
-// The size of the whole match, not of the page. `searchMessages` returns at most `clampLimit`
-// rows, and a page that cannot say how much it left behind reads as the whole archive.
-export function countMessages(db: DatabaseSync, query: string, filters: SearchFilters = {}): number {
+// The size of the whole match per session, not of the page, most hits first and then by session
+// id. `searchMessages` returns at most `clampLimit` rows, and a page that cannot say how much it
+// left behind reads as the whole archive.
+export function sessionCounts(
+  db: DatabaseSync,
+  query: string,
+  filters: SearchFilters = {},
+): { sessionId: string; hits: number }[] {
   const matched = matchClause(query, filters);
-  if (matched === null) return 0;
-  const row = db.prepare(`SELECT COUNT(*) AS n ${FROM_MATCHED} ${matched.where}`).get(...matched.params);
-  return Number(row?.n ?? 0);
+  if (matched === null) return [];
+  const sql =
+    `SELECT m.session_id, COUNT(*) AS n ${FROM_MATCHED} ${matched.where} ` +
+    'GROUP BY m.session_id ORDER BY n DESC, m.session_id';
+  return db.prepare(sql).all(...matched.params).map((row) => ({
+    sessionId: row.session_id as string,
+    hits: Number(row.n),
+  }));
 }
 
 // The query's searchable tokens: runs of letters, digits and underscores. The class is
@@ -255,12 +270,12 @@ export function queryTokens(query: string): string[] {
 // characters (dashes, colons, parentheses). Each surviving token is then quoted, because the
 // reduction cannot drop the operator *words*: a bare AND, OR, NOT or NEAR is grammar to FTS5, and a
 // user searching `AND backoff` would otherwise get a syntax error instead of rows. Quoted tokens
-// combine as an implicit AND, or as an explicit OR for the nearest-match fallback. A query with no
-// surviving token matches nothing, which the callers read as null.
-export function ftsMatch(query: string, match: 'all' | 'any' = 'all'): string | null {
+// combine as an implicit AND. A query with no surviving token matches nothing, which the callers
+// read as null.
+export function ftsMatch(query: string): string | null {
   const quoted = queryTokens(query).map((t) => `"${t}"`);
   if (quoted.length === 0) return null;
-  return quoted.join(match === 'any' ? ' OR ' : ' ');
+  return quoted.join(' ');
 }
 
 // Filters compile to plain WHERE clauses on the joined base table; `type` is a membership test on
@@ -269,12 +284,17 @@ function matchClause(
   query: string,
   filters: SearchFilters,
 ): { where: string; params: SQLInputValue[] } | null {
-  const match = ftsMatch(query, filters.match);
+  const match = ftsMatch(query);
   if (match === null) return null;
   let where = 'WHERE messages_fts MATCH ?';
   const params: SQLInputValue[] = [match];
   if (filters.cycle !== undefined) { where += ' AND m.cycle = ?'; params.push(filters.cycle); }
   if (filters.sessionId !== undefined) { where += ' AND m.session_id = ?'; params.push(filters.sessionId); }
+  if (filters.excludeSessionId !== undefined) {
+    where += ' AND m.session_id != ?';
+    params.push(filters.excludeSessionId);
+  }
+  if (filters.role !== undefined) { where += ' AND m.role = ?'; params.push(filters.role); }
   if (filters.turnRange !== undefined) {
     where += ' AND m.turn BETWEEN ? AND ?';
     params.push(filters.turnRange.from, filters.turnRange.to);

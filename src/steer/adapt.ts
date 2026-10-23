@@ -6,17 +6,17 @@ import type { AnchorType } from '../transcript/anchors.js';
 // summary ("keep error signatures verbatim") and never as a request ("please include …"), which
 // would re-enter the summary as something the user asked for.
 //
-// Every summary the platform produces ends by pointing the reader at the transcript file, so the
-// summary itself has to name `seb` or the archive is never the first stop. The marker names the
-// cycle this compaction creates when the caller knows it, so a reader can retrieve a dropped turn
-// with the handle as written.
+// The summary itself has to name `seb`, or a reader never learns the archive exists. The pointer
+// names only the search, because whatever else it names is what a reader reaches for when a search
+// disappoints. The marker names the cycle this compaction creates when the caller knows it, so a
+// reader can retrieve a dropped turn with the handle as written.
 function baseLines(cycle: number | null): string[] {
   return [
     '## Compact Instructions',
     '- Preserve verbatim: file paths edited, error signatures, commands run, user decisions.',
     markerLine(cycle),
     '- State once, at the top of the summary, that dropped detail is searchable with ' +
-      '`seb search <words>`; the transcript file is the fallback, not the first stop.',
+      '`seb search <words>`.',
     '- A Forgotten Index of dropped content will be injected; do not re-summarize archived material.',
   ];
 }

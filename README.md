@@ -110,8 +110,8 @@ yourself, the setup script links it globally where it can; if that did not happe
 
 | Command | Purpose |
 | --- | --- |
-| `seb search <query>` | Search everything archived: what you said, what the model said and ran, and what came back |
-| `seb show <id>` | Print the full original record, with surrounding turns |
+| `seb search <query>` | Search everything archived: what you said, what the model said and ran, and what came back. Hits from the calling session come first, with a count for every session |
+| `seb show <ref>` | Print a record as readable text, with the tool result that answered it and any surrounding turns. A large record is split into pages |
 | `seb index` | Show the current Forgotten Index |
 | `seb timeline` | Show the turn map for a cycle |
 | `seb status` | Show cycles, archive size, and steering state |
@@ -119,9 +119,11 @@ yourself, the setup script links it globally where it can; if that did not happe
 | `seb report` | Print a JSON summary of how the loop behaved, holding no archived content |
 | `seb reconcile` | Judge any compaction whose bookkeeping did not finish |
 
-Search covers the whole project rather than one session. Every command caps its output and tells you
-how to narrow the result, except `seb report`, which prints one JSON document because a truncated
-one does not parse.
+Search covers the whole project. When the model runs it, hits from the model's own session print
+first and the first line counts the hits in every other session. Every reference a command prints
+starts with its session, such as `6fb2c743/2:41`, and a reference without one means the calling
+session. Every command caps its output and tells you how to narrow the result, except `seb report`,
+which prints one JSON document because a truncated one does not parse.
 
 ## Archive layout
 

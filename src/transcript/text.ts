@@ -1,4 +1,5 @@
 import type { TranscriptEvent } from './parse.js';
+import { isSebOnly } from './shell.js';
 
 export function str(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
@@ -112,9 +113,15 @@ function typedText(content: unknown): string | null {
 // What a record said or saw, for the message index and its snippets: typed text, the string inputs
 // of every tool call, and every tool result, one block per line. Thinking blocks are skipped: they
 // are neither what the user saw nor what the model committed to, and they are often redacted. A
-// record with no message is a system record, whose `content` is the whole of what it said.
-export function messageText(record: Record<string, unknown> | null): string {
-  if (record === null) return '';
+// record with no message is a system record, whose `content` is the whole of what it said. A
+// compaction summary yields no text, so it never reaches the message index: it restates the whole
+// session and would otherwise answer almost every query; the same goes for the echo `/compact`
+// prints. A tool call whose id is in `skip`, and the result answering it, yield no text either.
+export function messageText(
+  record: Record<string, unknown> | null,
+  skip: ReadonlySet<string> = new Set(),
+): string {
+  if (record === null || record.isCompactSummary === true || isCompactEcho(record)) return '';
   const message = obj(record.message);
   if (message === null) return str(record.content) ?? '';
   const content = message.content;
@@ -123,6 +130,7 @@ export function messageText(record: Record<string, unknown> | null): string {
   return content
     .map((b) => obj(b))
     .filter((b): b is Record<string, unknown> => b !== null)
+    .filter((b) => !skip.has(str(b.id) ?? str(b.tool_use_id) ?? ''))
     .map(contentBlockText)
     .filter((t) => t !== '')
     .join('\n');
@@ -141,6 +149,34 @@ function contentBlockText(block: Record<string, unknown>): string {
     default:
       return '';
   }
+}
+
+// What `/compact` prints back into the transcript: a one-line notice, then the PreCompact hook's own
+// stdout, which is the steering block. It restates instructions rather than anything the session
+// did, so it is kept out of the index like a summary. The platform colours it, so the escape
+// characters are dropped and the colour codes they introduced are allowed before the notice.
+export function isCompactEcho(record: Record<string, unknown>): boolean {
+  const content = obj(record.message)?.content;
+  if (str(record.type) !== 'user' || typeof content !== 'string') return false;
+  return /^<local-command-stdout>(?:\[[0-9;]*m)*Compacted\b/.test(content.replaceAll('\u001b', ''));
+}
+
+export function sebCallIds(records: (Record<string, unknown> | null)[]): Set<string> {
+  const ids = new Set<string>();
+  for (const record of records) {
+    const content = obj(record?.message)?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      const id = sebCallId(obj(block));
+      if (id !== null) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function sebCallId(block: Record<string, unknown> | null): string | null {
+  if (block === null || str(block.type) !== 'tool_use' || str(block.name) !== 'Bash') return null;
+  return isSebOnly(str(obj(block.input)?.command) ?? '') ? str(block.id) : null;
 }
 
 // A tool result's body: a string `content` as it is, an array `content` as its text blocks joined.

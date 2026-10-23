@@ -53,16 +53,25 @@ interface Entry {
   score: number;
 }
 
-export function renderForgottenIndex(verdicts: Verdict[], anchors: Anchor[], budget: number): string {
+// `qualified` prefixes every entry with its session. The injected index leaves it off: only its own
+// session reads it, and a bare id resolves to the calling session. `seb index` may print another
+// session's cycle, so it turns it on.
+export function renderForgottenIndex(
+  verdicts: Verdict[],
+  anchors: Anchor[],
+  budget: number,
+  qualified = false,
+): string {
   const dropped = joinDropped(verdicts, anchors);
   if (dropped.length === 0) return '';
   const entries = dropped.filter((d) => LISTED.has(d.anchor.type));
+  const prefix = sessionPrefix(dropped.map((d) => d.anchor));
   const chrome = {
     header: DROPPED_HEADER,
     note: countsLine(dropped, verdicts.length),
-    footer: droppedFooter(sessionPrefix(dropped.map((d) => d.anchor))),
+    footer: droppedFooter(prefix),
   };
-  return fitToBudget(entries, chrome, budget);
+  return fitToBudget(entries, chrome, budget, qualified ? `${prefix}/` : '');
 }
 
 // The degraded path: PostCompact never saw a summary, so no anchor carries a verdict. The cycle's
@@ -75,7 +84,7 @@ export function renderUnreconciledIndex(anchors: Anchor[], budget: number): stri
     .map((anchor) => ({ anchor, score: 0 }));
   if (entries.length === 0) return '';
   const chrome = { ...UNRECONCILED_CHROME, footer: unreconciledFooter(sessionPrefix(anchors)) };
-  return fitToBudget(entries, chrome, budget);
+  return fitToBudget(entries, chrome, budget, '');
 }
 
 function joinDropped(verdicts: Verdict[], anchors: Anchor[]): Entry[] {
@@ -126,9 +135,10 @@ function countsLine(dropped: Entry[], total: number): string {
 //
 // The cut is found by binary search, which the render permits: one more entry appends one line, and
 // at most once the uncertain heading, so the rendered length never falls as the count rises.
-function fitToBudget(entries: Entry[], chrome: Chrome, budget: number): string {
+function fitToBudget(entries: Entry[], chrome: Chrome, budget: number, idPrefix: string): string {
   const fill = roundRobin(entries);
-  const firstN = (n: number): string => renderText(fill.slice(0, n).sort(byPriority), chrome);
+  const firstN = (n: number): string =>
+    renderText(fill.slice(0, n).sort(byPriority), chrome, idPrefix);
   let low = 0;
   let high = fill.length;
   let best = firstN(0);
@@ -145,9 +155,10 @@ function fitToBudget(entries: Entry[], chrome: Chrome, budget: number): string {
   return best;
 }
 
-function renderText(entries: Entry[], chrome: Chrome): string {
-  const plain = entries.filter((d) => !isUncertain(d)).map(entryLine);
-  const uncertain = entries.filter(isUncertain).map(entryLine);
+function renderText(entries: Entry[], chrome: Chrome, idPrefix: string): string {
+  const line = (d: Entry): string => entryLine(d, idPrefix);
+  const plain = entries.filter((d) => !isUncertain(d)).map(line);
+  const uncertain = entries.filter(isUncertain).map(line);
   const lines = [chrome.header, chrome.note, ...plain];
   if (uncertain.length > 0) lines.push(UNCERTAIN_HEADING, ...uncertain);
   lines.push(chrome.footer);
@@ -160,9 +171,9 @@ function isUncertain(d: Entry): boolean {
 
 // One entry per line: id, type, and enough content to recognize it. The retrieval command lives in
 // the footer, once, with the session prefix that makes it unambiguous.
-function entryLine(d: Entry): string {
+function entryLine(d: Entry, idPrefix: string): string {
   const a = d.anchor;
-  return `- ${a.id} ${a.type}: ${anchorDisplay(a)}`;
+  return `- ${idPrefix}${a.id} ${a.type}: ${anchorDisplay(a)}`;
 }
 
 // What an anchor shows on one line, here and in the CLI. Prose entries display the verbatim

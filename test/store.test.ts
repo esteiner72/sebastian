@@ -218,7 +218,107 @@ describe('store round-trip', () => {
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'anchors_fts%'").all()).toEqual([]);
     db.close();
   });
+
+  // An older build indexed every compaction summary and every `/compact` echo of the steering
+  // block, and its hooks keep doing so after a newer `seb` is installed. Each summary opens with the
+  // same platform sentence. The quote at turn 9 holds that sentence without being a summary, so it
+  // proves the record's flag decides and the phrase only narrows the scan. The echo is colour-coded
+  // as the platform writes it. An old archive and a stale writer are the same case: rows above the
+  // mark. A new echo archived by this build never reaches the index at all.
+  it('takes summaries and /compact echoes an older build indexed out of search at the next open, never indexes a new echo, and keeps their records byte-identical and a quote searchable', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'seb-summary-clean-'));
+    const path = join(dir, 'sebastian.db');
+    const opening = 'This session is being continued from a previous conversation that ran out of context.';
+    const echoText =
+      '<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m\n' +
+      '\u001b[2m- State once that dropped detail is searchable with `seb search <words>`. probe 4417\u001b[22m</local-command-stdout>';
+    const summary = record('s1', 'user', `${opening} Summary: probe 2611.`, { isCompactSummary: true });
+    const quote = record('q2', 'user', `Why does every summary say "${opening}"`);
+    const echo = record('e3', 'user', echoText);
+    const old = openDbAt(path);
+    writeAsOlderBuild(old, [
+      [8, summary, `${opening} Summary: probe 2611.`],
+      [9, quote, `Why does every summary say "${opening}"`],
+      [10, echo, echoText],
+    ]);
+    old.close();
+
+    const db = openDbAt(path);
+    expect(searchMessages(db, 'continued previous conversation').map((h) => h.turn)).toEqual([9]);
+    expect(searchMessages(db, '2611')).toEqual([]);
+    expect(searchMessages(db, '4417')).toEqual([]);
+    expect(messagesInRange(db, 'old-build', 8, 10).map((m) => m.raw)).toEqual([summary, quote, echo]);
+
+    const fresh = record('e4', 'user', echoText.replace('4417', '5523'), { sessionId: 'new-build' });
+    writeFileSync(join(dir, 'echo.jsonl'), `${fresh}\n`);
+    const events = parseTranscript(join(dir, 'echo.jsonl'));
+    archiveDelta(db, events, extractAnchors(events));
+    expect(searchMessages(db, '5523')).toEqual([]);
+    db.close();
+  });
+
+  // A model that searched the archive left its own command and the printed page in the transcript,
+  // and both say the words it searched for. The call at turn 1 runs nothing but seb: a `cd`, a
+  // quoted `|` that is not a pipe, `2>&1`, and a `head`. The call at turn 3 also runs an `rg` over
+  // the source, so it and its result at turn 4 are real work and stay searchable, seb and all.
+  it('never indexes a call that only runs seb, or its printed result, from this build or an older one, and keeps a call that also does real work searchable', () => {
+    const lines = [
+      record('u0', 'user', 'Why does the retry loop hang?', { sessionId: 'seb-self' }),
+      record('a1', 'assistant', [bash('toolu_s', 'cd /repo && seb search "retry|hang" 2>&1 | head -5')], { sessionId: 'seb-self' }),
+      record('u2', 'user', [result('toolu_s', '6 hits for "retry" in this session')], { sessionId: 'seb-self' }),
+      record('a3', 'assistant', [bash('toolu_m', 'rg -n retry src; seb search retry')], { sessionId: 'seb-self' }),
+      record('u4', 'user', [result('toolu_m', 'src/sync.ts:3: retry()')], { sessionId: 'seb-self' }),
+    ];
+    const dir = mkdtempSync(join(tmpdir(), 'seb-self-'));
+    writeFileSync(join(dir, 'self.jsonl'), `${lines.join('\n')}\n`);
+    const path = join(dir, 'sebastian.db');
+    const db = openDbAt(path);
+    const events = parseTranscript(join(dir, 'self.jsonl'));
+    archiveDelta(db, events, extractAnchors(events));
+    const retryTurns = (d: DatabaseSync): number[] => searchMessages(d, 'retry').map((h) => h.turn).sort((a, b) => a - b);
+    expect(retryTurns(db)).toEqual([0, 3, 4]);
+    expect(messagesInRange(db, 'seb-self', 1, 2).map((m) => m.raw)).toEqual(lines.slice(1, 3));
+
+    // The same seb-only pair, written by an older build with its text indexed, is cleaned at the
+    // next open, and the mixed call is left as it was.
+    writeAsOlderBuild(db, [
+      [11, lines[1]!.replace('"a1"', '"o1"'), 'cd /repo && seb search "retry|hang" 2>&1 | head -5'],
+      [12, lines[2]!.replace('"u2"', '"o2"'), '6 hits for "retry" in this session'],
+    ]);
+    db.close();
+    const reopened = openDbAt(path);
+    expect(retryTurns(reopened)).toEqual([0, 3, 4]);
+    reopened.close();
+  });
 });
+
+const bash = (id: string, command: string) => ({ type: 'tool_use', id, name: 'Bash', input: { command } });
+const result = (id: string, content: string) => ({ type: 'tool_result', tool_use_id: id, content });
+
+// A transcript record in the shape Claude Code writes. Unset fields are dropped by JSON.stringify.
+function record(
+  uuid: string,
+  role: 'user' | 'assistant',
+  content: unknown,
+  extra: { sessionId?: string; isCompactSummary?: boolean } = {},
+): string {
+  return JSON.stringify({
+    type: role, uuid, sessionId: extra.sessionId ?? 'old-build', timestamp: '2026-09-02T08:00:00.000Z',
+    isCompactSummary: extra.isCompactSummary, message: { role, content },
+  });
+}
+
+// Rows as a build without the clean writes them: the record, its text, and an index entry for it.
+function writeAsOlderBuild(db: DatabaseSync, rows: [turn: number, raw: string, text: string][]): void {
+  const insert = db.prepare(
+    'INSERT INTO messages (uuid, session_id, cycle, turn, ts, role, record, text) VALUES (?, ?, 0, ?, NULL, ?, ?, ?)',
+  );
+  const fts = db.prepare('INSERT INTO messages_fts (rowid, text) VALUES (?, ?)');
+  for (const [turn, raw, text] of rows) {
+    const r = JSON.parse(raw) as { uuid: string; sessionId: string; message: { role: string } };
+    fts.run(insert.run(r.uuid, r.sessionId, turn, r.message.role, raw, text).lastInsertRowid, text);
+  }
+}
 
 // A field tester who pulls a new build mid-test must keep the archive they have already produced.
 // Their database was created without the columns the loop now writes, and `CREATE TABLE IF NOT

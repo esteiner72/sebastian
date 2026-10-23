@@ -1,8 +1,9 @@
-6 hits for "retry":
-0:0 user — Why does the sync retry loop hang after the first timeout?
-0:1 assistant (t1a1 t1r1) — The retry loop hangs because the backoff timer never resets between attempts. Each retry reuses the expired deadline, so the second attempt aborts immediately. /repo/src/sync/retry.ts
-0:3 assistant (t3d1 t3c1) — /repo/src/sync/retry.ts reuseDeadline() resetTimer() npm test
-0:4 user (t4e1) — Exit code 1 TypeError: Cannot read properties of undefined (reading 'reset') at retrySync (/repo/src/sync/retry.ts:14:3)
-0:5 assistant (t5c1 t5r1 t5w1) — Fixed. The timer now resets on every attempt. sed -n '1,40p' /repo/src/sync/retry.ts https://example.com/docs/backoff backoff guidance
-0:7 user (t7u1) — Keep the exponential backoff, and never retry more than three times.
-Retrieve one with `seb show <cycle:turn>` or `seb show <id>`.
+6 hits for "retry" in this session (fix-seve); none in other sessions.
+## This session — 6 hits
+fix-seve/0:0 user — Why does the sync retry loop hang after the first timeout?
+fix-seve/0:1 assistant (fix-seve/t1a1 fix-seve/t1r1) — The retry loop hangs because the backoff timer never resets between attempts. Each retry reuses the expired deadline, so the second attempt aborts immediately. /repo/src/sync/retry.ts
+fix-seve/0:3 assistant (fix-seve/t3d1 fix-seve/t3c1) — /repo/src/sync/retry.ts reuseDeadline() resetTimer() npm test
+fix-seve/0:4 user (fix-seve/t4e1) — Exit code 1 TypeError: Cannot read properties of undefined (reading 'reset') at retrySync (/repo/src/sync/retry.ts:14:3)
+fix-seve/0:5 assistant (fix-seve/t5c1 fix-seve/t5r1 fix-seve/t5w1) — Fixed. The timer now resets on every attempt. sed -n '1,40p' /repo/src/sync/retry.ts https://example.com/docs/backoff backoff guidance
+fix-seve/0:7 user (fix-seve/t7u1) — Keep the exponential backoff, and never retry more than three times.
+Retrieve one with `seb show <ref>`.

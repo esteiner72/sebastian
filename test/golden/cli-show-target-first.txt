@@ -1,7 +1,9 @@
-turn 3  user  2026-08-30T10:00:00.000Z
-{"t":3}
-turn 5  user  2026-08-30T10:00:00.000Z
-{"t":5}
-turn 6  user  2026-08-30T10:00:00.000Z
-{"t":6}
-… 2 context turns omitted — view one with `seb show <cycle:turn>`.
+fix-seve/0:3  user  2026-08-30T10:00:00.000Z
+t3
+
+fix-seve/0:5  user  2026-08-30T10:00:00.000Z
+t5
+
+fix-seve/0:6  user  2026-08-30T10:00:00.000Z
+t6
+

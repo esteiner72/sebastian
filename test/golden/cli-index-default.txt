@@ -1,0 +1,6 @@
+## Forgotten Index
+Dropped this cycle: 1 error, 1 answer, 1 user, 1 url (9 anchors reconciled).
+- fix-seve/t4e1 error: TypeError: Cannot read properties of undefined (reading 'reset')
+- fix-seve/t1a1 answer: The retry loop hangs because the backoff timer never resets between attempts. Each retry reuses the expired deadline, so
+- fix-seve/t5w1 url: https://example.com/docs/backoff
+Run `seb index --dropped` for the full list; `seb show fix-seve/<id>` retrieves an original.

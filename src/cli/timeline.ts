@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { listAnchors, logTelemetry } from '../store/db.js';
 import type { Anchor } from '../transcript/anchors.js';
 import { integer, usageWrap } from './args.js';
-import { capOutput, OUTPUT_TOKENS, plural } from './output.js';
+import { capOutput, OUTPUT_TOKENS, plural, qualifiedRef } from './output.js';
 
 const HINT = '--cycle N';
 
@@ -64,15 +64,20 @@ function groupBlock(g: Group): string {
     `session ${g.sessionId}  cycle ${g.cycle}  ` +
     `turns ${g.anchors[0]?.turn ?? 0}–${g.anchors.at(-1)?.turn ?? 0}  ` +
     `${plural(g.anchors.length, 'anchor')}`;
-  return `${[header, ...turnLines(g.anchors)].join('\n')}\n`;
+  return `${[header, ...turnLines(g)].join('\n')}\n`;
 }
 
-function turnLines(anchors: Anchor[]): string[] {
+// Each turn opens with its position and lists its anchors, all qualified, so either can be copied
+// into `seb show` from a timeline that spans several sessions.
+function turnLines(g: Group): string[] {
   const byTurn = new Map<number, string[]>();
-  for (const a of anchors) {
+  for (const a of g.anchors) {
+    const item = `${qualifiedRef(a.sessionId, a.id)} ${a.type}`;
     const items = byTurn.get(a.turn);
-    if (items === undefined) byTurn.set(a.turn, [`${a.id} ${a.type}`]);
-    else items.push(`${a.id} ${a.type}`);
+    if (items === undefined) byTurn.set(a.turn, [item]);
+    else items.push(item);
   }
-  return [...byTurn].map(([turn, items]) => `  turn ${turn}  ${items.join(', ')}`);
+  return [...byTurn].map(
+    ([turn, items]) => `  ${qualifiedRef(g.sessionId, `${g.cycle}:${turn}`)}  ${items.join(', ')}`,
+  );
 }

@@ -1,0 +1,8 @@
+--type assistant matches every record the assistant wrote.
+--cycle fix-seco is read as --session fix-seco.
+3 hits for "retry" in session fix-seco.
+## Session fix-seco — 3 hits
+fix-seco/0:1 assistant (fix-seco/t1a1 fix-seco/t1r1) — The retry loop hangs because the backoff timer never resets between attempts. Each retry reuses the expired deadline, so the second attempt aborts immediately. /repo/src/sync/retry.ts
+fix-seco/0:3 assistant (fix-seco/t3d1 fix-seco/t3c1) — /repo/src/sync/retry.ts reuseDeadline() resetTimer() npm test
+fix-seco/0:5 assistant (fix-seco/t5c1 fix-seco/t5r1 fix-seco/t5w1) — Fixed. The timer now resets on every attempt. sed -n '1,40p' /repo/src/sync/retry.ts https://example.com/docs/backoff backoff guidance
+Retrieve one with `seb show <ref>`.

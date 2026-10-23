@@ -4,7 +4,7 @@ import { logTelemetry, newestReconciledCycle, type CycleIndex } from '../store/d
 import { renderForgottenIndex } from '../reconcile/render.js';
 import type { Anchor } from '../transcript/anchors.js';
 import { usageWrap } from './args.js';
-import { anchorLine, capOutput, OUTPUT_TOKENS, spansSessions } from './output.js';
+import { anchorLine, capOutput, OUTPUT_TOKENS } from './output.js';
 
 const HINT = '--cycle on `seb timeline`, or `seb search` with a query';
 
@@ -19,8 +19,8 @@ interface Entry {
   score: number;
 }
 
-// The index the last compaction earned, on demand. With no flag it is the same render that
-// SessionStart injects; `--dropped` and `--all` list every anchor of the cycle instead, including
+// The index the last compaction earned, on demand. With no flag it is the render SessionStart
+// injects, with every entry qualified, because the cycle may belong to another session; `--dropped` and `--all` list every anchor of the cycle instead, including
 // the types that are counted but never injected, and `--raw` adds the reconciler's score.
 export function indexCommand(db: DatabaseSync, argv: string[]): string {
   const opts = parseIndex(argv);
@@ -63,7 +63,7 @@ function select(cycle: CycleIndex, opts: Options): Entry[] {
 }
 
 function renderInjected(cycle: CycleIndex): string {
-  const text = renderForgottenIndex(cycle.verdicts, cycle.anchors, OUTPUT_TOKENS);
+  const text = renderForgottenIndex(cycle.verdicts, cycle.anchors, OUTPUT_TOKENS, true);
   if (text === '') {
     return `Cycle ${cycle.cycle} of session ${cycle.sessionId} dropped nothing; the summary kept every anchor.\n`;
   }
@@ -71,12 +71,11 @@ function renderInjected(cycle: CycleIndex): string {
 }
 
 function renderList(cycle: CycleIndex, entries: Entry[], opts: Options): string {
-  const qualified = spansSessions(entries.map((e) => e.anchor));
   const dropped = cycle.verdicts.filter((v) => v.verdict === 'dropped').length;
   const heading =
     `## Forgotten Index — session ${cycle.sessionId}, cycle ${cycle.cycle} (${opts.list})\n` +
     `${dropped} of ${cycle.verdicts.length} reconciled anchors dropped.\n`;
-  const body = entries.map((e) => `${anchorLine(e.anchor, qualified, suffix(e, opts))}\n`).join('');
+  const body = entries.map((e) => `${anchorLine(e.anchor, suffix(e, opts))}\n`).join('');
   return `${heading}${capOutput(body, OUTPUT_TOKENS, HINT)}Retrieve an original with \`seb show <id>\`.\n`;
 }
 

@@ -1,0 +1,3 @@
+No record has every word of "read-properties nonexistentword".
+Records per word: read-properties 1, nonexistentword 0.
+Drop words and search again; a word with 0 records cannot match.

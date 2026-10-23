@@ -22,6 +22,7 @@ import { reconcileCommand } from '../src/cli/reconcile.js';
 import { main } from '../src/index.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/seven-types.jsonl', import.meta.url));
+const BOUNDARY = fileURLToPath(new URL('./fixtures/boundary.jsonl', import.meta.url));
 
 const golden = (name: string): string =>
   readFileSync(fileURLToPath(new URL(`./golden/${name}`, import.meta.url)), 'utf8');
@@ -30,15 +31,16 @@ const tempDir = (prefix: string): string => mkdtempSync(join(tmpdir(), prefix));
 
 const tempDb = (prefix: string): DatabaseSync => openDbAt(join(tempDir(prefix), 'sebastian.db'));
 
-// A record of a known size at a known turn. Every header is 39 characters, which is what makes the
-// window goldens derivable with arithmetic instead of by running the code.
-const msg = (turn: number, raw: string): ArchivedMessage => ({
+// A user record with known text at a known turn. Every header is 44 characters and every block
+// adds three newlines, so a block is 47 characters plus its text, which is what makes the window
+// goldens derivable with arithmetic instead of by running the code.
+const msg = (turn: number, text: string): ArchivedMessage => ({
   sessionId: 'fix-seven',
   turn,
   cycle: 0,
   ts: '2026-08-30T10:00:00.000Z',
   role: 'user',
-  raw,
+  raw: JSON.stringify({ type: 'user', message: { role: 'user', content: text } }),
 });
 
 function archiveFixture(db: DatabaseSync, path: string): void {
@@ -96,18 +98,20 @@ function reconcileFixture(db: DatabaseSync): void {
 // heading, an id form or a truncation that changes is invisible to it and visible here.
 
 describe('cli rendering', () => {
-  it('renders one line per hit in transcript order, so a page of search results reads as a session rather than as a relevance ranking', () => {
+  it('renders one line per hit in transcript order under a counts line, so a page of search results reads as a session rather than as a relevance ranking', () => {
     const db = tempDb('seb-cli-search-');
     archiveFixture(db, FIXTURE);
-    expect(search(db, ['retry'])).toBe(golden('cli-search.txt'));
+    expect(search(db, ['retry'], 'fix-seven')).toBe(golden('cli-search.txt'));
     db.close();
   });
 
-  it('qualifies ids with the session prefix only once a result set spans two sessions, and resolves that prefix back to one record', () => {
+  // Both sessions hold the same six hits. The caller's print first and the counts line names the
+  // other session, so a reader piping through `head` sees its own session and knows what else exists.
+  it('lists the calling session\'s hits before every other session\'s, so `head` never hides them, and resolves a printed reference back to one record', () => {
     const db = tempDb('seb-cli-cross-');
     archiveFixture(db, FIXTURE);
     archiveFixture(db, secondSession());
-    expect(search(db, ['retry'])).toBe(golden('cli-search-cross-session.txt'));
+    expect(search(db, ['retry'], 'fix-seven')).toBe(golden('cli-search-cross-session.txt'));
 
     // The bare id now names two rows, and answering with either one would be a wrong record
     // returned as a right one.
@@ -116,42 +120,94 @@ describe('cli rendering', () => {
     );
     expect(show(db, ['fix-seco/t7u1'])).toContain('session fix-second, cycle 0, turn 7');
 
-    // `--session` takes the same printed prefix. An unresolvable one is refused rather than
-    // answered with an empty result, which a reader cannot tell from an empty archive.
-    expect(search(db, ['retry', '--session', 'fix-seco'])).toBe(golden('cli-search.txt'));
+    // A bare reference from inside a session means that session's record, by id or by position.
+    // With no caller, or a caller holding neither, it stays ambiguous rather than picking one.
+    expect(show(db, ['t7u1'], 'fix-second')).toContain('session fix-second, cycle 0, turn 7');
+    expect(show(db, ['0:7'], 'fix-seven')).toContain('session fix-seven, cycle 0, turn 7');
+    expect(() => show(db, ['0:7'], 'not-archived')).toThrow('0:7 exists in 2 sessions');
+
+    // `--session` takes the same printed prefix and narrows to that one session. An unresolvable
+    // one is refused rather than answered with an empty result, which a reader cannot tell from an
+    // empty archive.
+    const narrowed = search(db, ['retry', '--session', 'fix-seco'], 'fix-seven');
+    expect(narrowed).toContain('6 hits for "retry" in session fix-seco.\n## Session fix-seco — 6 hits\n');
+    expect(narrowed).not.toContain('fix-seve/');
     expect(() => search(db, ['retry', '--session', 'fix-s'])).toThrow(
       '"fix-s" matches 2 sessions: fix-second, fix-seven',
     );
     db.close();
   });
 
-  // One wrong word in a two-word query finds nothing under AND. The OR page is the six records the
-  // right word reaches, under a heading that says the match is partial, so a reader corrects the
-  // query instead of concluding the archive is empty.
-  it('answers a query with one wrong word by the records that match the rest, and says so, so one imprecise query is not read as an empty archive', () => {
-    const db = tempDb('seb-cli-fallback-');
+  it('groups hits by session with a count per session when no session ran the command, so a terminal run still says where each hit lives', () => {
+    const db = tempDb('seb-cli-nocaller-');
     archiveFixture(db, FIXTURE);
-    expect(search(db, ['retry', 'nonexistentword'])).toBe(golden('cli-search-fallback.txt'));
+    archiveFixture(db, secondSession());
+    expect(search(db, ['retry'])).toBe(golden('cli-search-no-caller.txt'));
     db.close();
   });
 
-  it('lists every dropped anchor with its score, including the types the injected index never spends tokens on', () => {
+  // "nonexistentword" matches nothing, so no record holds both terms. Partial matches on the first
+  // term would answer a different question; the per-word counts show which word to drop. Turn 4 is
+  // the only record holding both `read` and `properties`, so the hyphenated term counts as one word
+  // with one record rather than as two words with their own counts.
+  it('answers a query no record fully matches with each word\'s own count under the filters it ran with, so one wrong word is dropped instead of answered with unrelated partial matches', () => {
+    const db = tempDb('seb-cli-zero-');
+    archiveFixture(db, FIXTURE);
+    expect(search(db, ['read-properties', 'nonexistentword'])).toBe(golden('cli-search-zero.txt'));
+
+    // The assistant wrote turns 1, 3 and 5, all of which say "retry". Without the filter named,
+    // "retry 3" would read as the archive holding three records that say it.
+    expect(search(db, ['retry', 'nonexistentword', '--type', 'assistant'])).toBe(
+      '--type assistant matches every record the assistant wrote.\n' +
+        'No record has every word of "retry nonexistentword" under --type assistant.\n' +
+        'Records per word, under the same filters: retry 3, nonexistentword 0.\n' +
+        'Drop words or filters and search again; a word with 0 records cannot match.\n',
+    );
+    db.close();
+  });
+
+  // Both guesses come from the field: a model wanting its own earlier reply, and a model passing a
+  // session to `--cycle`. The assistant wrote turns 1, 3 and 5, and only turn 1 carries an answer
+  // anchor, so an anchor-type reading would find one of the three.
+  it('reads `--type assistant` as every record the assistant wrote and a session passed to `--cycle` as `--session`, and says so, so a guessed flag returns the model\'s own replies instead of an error', () => {
+    const db = tempDb('seb-cli-alias-');
+    archiveFixture(db, FIXTURE);
+    archiveFixture(db, secondSession());
+    expect(search(db, ['retry', '--type', 'assistant', '--cycle', 'fix-seco'])).toBe(
+      golden('cli-search-alias.txt'),
+    );
+    expect(search(db, ['retry', '--cycle', 'fix-seco/0'])).toContain(
+      '--cycle fix-seco/0 is read as --session fix-seco --cycle 0.\n6 hits for "retry" in session fix-seco.\n',
+    );
+    expect(() => search(db, ['retry', '--cycle', 'fix-seco', '--session', 'fix-seve'])).toThrow(
+      '--cycle names a session here; pass --session or --cycle, not both.',
+    );
+    db.close();
+  });
+
+  // The summary at turn 7 says "Refactor the parser module", so an indexed summary would be a
+  // second hit for "parser" beside the user's own instruction at turn 0.
+  it('never returns a compaction summary as a hit, so a query is answered by what the session said rather than by its restatement', () => {
+    const db = tempDb('seb-cli-summary-');
+    archiveFixture(db, BOUNDARY);
+    expect(search(db, ['parser'], 'fix-boundary')).toBe(golden('cli-search-summary.txt'));
+    db.close();
+  });
+
+  // Bare `seb index` is the render SessionStart injects, over the project's newest reconciled
+  // cycle, with each entry qualified: that cycle may be another session's, and a bare id would
+  // resolve to the caller's own record. A dropped `user` anchor is counted there but never listed,
+  // and `--dropped` is the only way to read it.
+  it('lists every dropped anchor with its score and qualifies every id, so a listing of another session\'s cycle cannot open the caller\'s record', () => {
     const db = tempDb('seb-cli-index-');
     archiveFixture(db, FIXTURE);
     reconcileFixture(db);
     expect(indexCommand(db, ['--dropped', '--raw'])).toBe(golden('cli-index-dropped.txt'));
-
-    // Bare `seb index` is the same render SessionStart injects, over the project's newest
-    // reconciled cycle: a dropped `user` anchor is counted there but never listed, and `--dropped`
-    // above is the only way to read it.
-    const injected = indexCommand(db, []);
-    expect(injected).toContain('Dropped this cycle: 1 error, 1 answer, 1 user, 1 url (9 anchors reconciled).');
-    expect(injected).toContain('- t4e1 error: TypeError: Cannot read properties of undefined');
-    expect(injected).not.toContain('t7u1');
+    expect(indexCommand(db, [])).toBe(golden('cli-index-default.txt'));
     db.close();
   });
 
-  it('maps every anchor-bearing turn in extraction order, so a reader can aim `seb show` at a position without a query', () => {
+  it('maps every anchor-bearing turn in extraction order with qualified positions and ids, so a reader can aim `seb show` at a position without a query', () => {
     const db = tempDb('seb-cli-timeline-');
     archiveFixture(db, FIXTURE);
     expect(timeline(db, [])).toBe(golden('cli-timeline.txt'));
@@ -171,16 +227,14 @@ describe('cli rendering', () => {
 
   // The row order inside a page comes from bm25 rank, which cannot be derived by hand, so what is
   // pinned here is the heading and the trailer — the two lines that say a page is not the whole
-  // match. Without them a `--limit 2` page reads exactly like an archive holding two anchors.
+  // match. Without them a `--limit 2` page reads exactly like an archive holding two anchors. An
+  // unsaturated page says nothing about limits at all; `cli-search.txt` pins that in full.
   it('states the size of the whole match when the page falls short of it, so a limited search is never read as the whole archive', () => {
     const db = tempDb('seb-cli-limit-');
     archiveFixture(db, FIXTURE);
-    const page = search(db, ['retry', '--limit', '2']);
-    expect(page).toContain('2 of 6 hits for "retry" — showing the 2 best matches.\n');
-    expect(page).toContain('Raise --limit or narrow with --type, --cycle or --turn to see the rest.\n');
-
-    // An unsaturated page says nothing about limits at all; `cli-search.txt` pins that in full.
-    expect(search(db, ['retry'])).toBe(golden('cli-search.txt'));
+    const page = search(db, ['retry', '--limit', '2'], 'fix-seven');
+    expect(page).toContain('## This session — the best 2 of 6 hits\n');
+    expect(page).toContain('Narrow with --type, --cycle, --turn or --session to see the rest, or raise --limit.\n');
 
     // `--limit 0` reached the store as `LIMIT 0` and answered "no records match" over six of them.
     expect(() => search(db, ['retry', '--limit', '0'])).toThrow(
@@ -189,23 +243,45 @@ describe('cli rendering', () => {
     db.close();
   });
 
-  // Derived at a 200-character room: the omission footer reserves 67, leaving 133. The header
-  // takes 39 and the marker is measured at its widest — 38 — so 56 of the record's 300 characters
-  // survive. A whole-lines cap sees one indivisible line here and keeps none of it.
-  it('cuts an oversized target record at a character boundary and reports how much it hid, so `seb show` never answers with a footer and no record', () => {
-    const records = [msg(4, '{"t":4}'), msg(5, 'ab'.repeat(150)), msg(6, '{"t":6}')];
-    expect(fitWindow(records, 5, 200)).toBe(golden('cli-show-truncated.txt'));
+  // A 300-character line in a 200-character room. The 44-character header and its newline leave
+  // 155 characters on the first page; the other 145 open the second, followed by the line's newline
+  // and the blank line that closes the record. A cut that dropped or repeated a character at the
+  // join would garble a minified tool result exactly where a reader resumes.
+  it('splits a line longer than a page across pages without dropping or repeating a character, so a minified tool result still reads back whole', () => {
+    const records = [msg(4, 't4'), msg(5, 'ab'.repeat(150)), msg(6, 't6')];
+    const first = fitWindow(records, 5, 200, [], 1);
+    const second = fitWindow(records, 5, 200, [], 2);
+    expect(first.pages).toBe(2);
+    expect(first.body).toBe(`fix-seve/0:5  user  2026-08-30T10:00:00.000Z\n${'ab'.repeat(77)}a`);
+    expect(second.body).toBe(`b${'ab'.repeat(72)}\n\n`);
+    // A paged target shows no context; both neighbours are named instead.
+    expect(first.omitted.map((m) => m.turn)).toEqual([4, 6]);
   });
 
-  // Turn 4 is bulky and sits between the earlier context and the target. Filling the room in turn
-  // order spends all of it there and never reaches turn 5, which is the record that was asked for.
-  // Turn 4 is skipped rather than ending the scan, so turns 3 and 6 still make it in.
+  // An assistant turn that only thought: an empty body under its header would read as a record
+  // the archive lost.
+  it('marks a record that holds only reasoning, so an empty body is not read as a lost record', () => {
+    const thought = {
+      ...msg(5, ''),
+      role: 'assistant',
+      raw: JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'x' }] } }),
+    };
+    expect(fitWindow([thought], 5, 200, [], 1).body).toBe(
+      'fix-seve/0:5  assistant  2026-08-30T10:00:00.000Z\n[reasoning only, not shown]\n\n',
+    );
+  });
+
+  // Derived at a 200-character room: the target block is 49, leaving 151. Nearest first, ties to
+  // the earlier turn: turn 4 (247) is skipped as too large for what is left, turn 6 (49) leaves
+  // 102, turn 3 (49) leaves 53, and turn 7 (147) is skipped too.
   it('allocates the target before its context, so a bulky neighbouring turn cannot displace the record that was asked for', () => {
     const records = [
-      msg(3, '{"t":3}'), msg(4, 'y'.repeat(200)), msg(5, '{"t":5}'),
-      msg(6, '{"t":6}'), msg(7, 'z'.repeat(100)),
+      msg(3, 't3'), msg(4, 'y'.repeat(200)), msg(5, 't5'),
+      msg(6, 't6'), msg(7, 'z'.repeat(100)),
     ];
-    expect(fitWindow(records, 5, 300)).toBe(golden('cli-show-target-first.txt'));
+    const fitted = fitWindow(records, 5, 200, [], 1);
+    expect(fitted.body).toBe(golden('cli-show-target-first.txt'));
+    expect(fitted.omitted.map((m) => m.turn)).toEqual([4, 7]);
   });
 });
 
@@ -213,7 +289,7 @@ describe('cli retrieval', () => {
   // Turn 3 calls two tools; only `npm test` has an archived answer, and it sits at turn 4. Live, the
   // gap is six turns of uuid-less records, so a reader who found the command by its anchor would
   // otherwise have to guess a --context that reaches it.
-  it('shows the tool result that answered a tool call beside the call, so a reader who found the command by its anchor does not guess at --context', () => {
+  it('shows a tool call and the result that answered it as readable text, so a reader neither parses JSON nor guesses at --context', () => {
     const db = tempDb('seb-cli-paired-');
     archiveFixture(db, FIXTURE);
     expect(show(db, ['t3c1'])).toBe(golden('cli-show-paired.txt'));
@@ -222,24 +298,25 @@ describe('cli retrieval', () => {
     db.close();
   });
 
-  // The round trip the whole archive exists for: find an anchor by words the summary lost, then
-  // get the original line back unchanged. Telemetry is the second half — `computeSteering` counts
-  // search and show rows with hits above zero, so a command that miscounts its own results
-  // silently disables the loop's adaptation.
-  it('returns the archived JSONL line byte-identical from an id found by search, and logs per-type hits that steering can count', () => {
+  // Find a record by words the summary lost, then read it with its neighbours. The byte-identical
+  // round trip is the store's contract and is pinned in store.test.ts. Telemetry is the second
+  // half here: `computeSteering` counts search and show rows with hits above zero, so a command
+  // that miscounts its own results silently disables the loop's adaptation.
+  it('shows a record found by search with its neighbours as text, and logs per-type hits that steering can count', () => {
     const db = tempDb('seb-cli-roundtrip-');
     archiveFixture(db, FIXTURE);
-    const lines = readFileSync(FIXTURE, 'utf8').split('\n');
 
-    expect(search(db, ['exponential', 'backoff'])).toContain('0:7 user (t7u1) — Keep the exponential');
+    expect(search(db, ['exponential', 'backoff'])).toContain('fix-seve/0:7 user (fix-seve/t7u1) — Keep the exponential');
     const shown = show(db, ['t7u1', '--context', '1']);
-    expect(shown).toContain(`turn 7  user  2026-08-30T10:00:40.000Z\n${lines[7]}\n`);
-    expect(shown).toContain(lines[6]);
-    expect(shown).toContain(lines[8]);
+    expect(shown).toContain(
+      'fix-seve/0:6  user  2026-08-30T10:00:35.000Z\n[tool result]\nexport function retrySync() {\n  resetTimer();\n\n' +
+        'fix-seve/0:7  user  2026-08-30T10:00:40.000Z\nKeep the exponential backoff, and never retry more than three times.\n\n' +
+        'fix-seve/0:8  assistant  2026-08-30T10:00:45.000Z\nDone.\n\n',
+    );
 
     // A search that found nothing must log a zero, or a miss reads as a recovery.
     expect(search(db, ['nonexistentterm', '--type', 'error'])).toBe(
-      'No records match "nonexistentterm".\n',
+      'No records match "nonexistentterm" under --type error.\n',
     );
 
     const rows = db
@@ -250,6 +327,36 @@ describe('cli retrieval', () => {
     expect(rows.filter((r) => r.cmd === 'show')).toEqual([
       { cmd: 'show', anchor_type: 'user', anchor_id: 't7u1', hits: 1 },
     ]);
+    db.close();
+  });
+
+  // A Write of a 100-line runbook, each line 100 characters. The page room is 8,000. The header (50),
+  // the call line (19), the path line (28) and the first content line with its `content: ` label
+  // (110) take 207, and 77 more 101-character lines bring page 1 to 7,984. Page 2 holds lines 079
+  // to 100 and the record's closing blank line.
+  it('pages a record larger than one page at line boundaries and names the next page, so a large file write comes back whole instead of sliced', () => {
+    const lines = Array.from({ length: 100 }, (_, i) => `line ${String(i + 1).padStart(3, '0')} ${'x'.repeat(91)}`);
+    const record = {
+      type: 'assistant', uuid: 'p0', sessionId: 'page-session', timestamp: '2026-08-30T10:00:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_p', name: 'Write', input: { file_path: '/repo/RUNBOOK.md', content: lines.join('\n') } }],
+      },
+    };
+    const path = join(tempDir('seb-cli-page-'), 'page.jsonl');
+    writeFileSync(path, `${JSON.stringify(record)}\n`);
+    const db = tempDb('seb-cli-paged-');
+    archiveFixture(db, path);
+
+    const heading = '## page-ses/0:0 — edit anchor page-ses/t0d1, session page-session, cycle 0, turn 0';
+    const page1 =
+      `${heading}, page 1 of 2\n` +
+      'page-ses/0:0  assistant  2026-08-30T10:00:00.000Z\n[tool call: Write]\nfile_path: /repo/RUNBOOK.md\n' +
+      `content: ${lines.slice(0, 78).join('\n')}\n` +
+      'Page 1 of 2 — next: `seb show page-ses/0:0 --page 2`.\n';
+    expect(show(db, ['t0d1'])).toBe(page1);
+    expect(show(db, ['t0d1', '--page', '2'])).toBe(golden('cli-show-paged.txt'));
+    expect(() => show(db, ['t0d1', '--page', '3'])).toThrow('page-ses/0:0 has 2 pages');
     db.close();
   });
 
@@ -338,13 +445,18 @@ describe('cli process edge', () => {
   const HOME = tempDir('seb-cli-home-');
   const REAL_HOME = process.env.HOME;
   const REAL_CWD = process.cwd();
+  const REAL_SESSION = process.env.CLAUDE_CODE_SESSION_ID;
 
+  // A run inside a Claude Code session inherits its session id, which would make `main` resolve
+  // bare references against a session this archive has never seen.
   beforeAll(() => {
     process.env.HOME = HOME;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
   });
 
   afterAll(() => {
     process.env.HOME = REAL_HOME;
+    if (REAL_SESSION !== undefined) process.env.CLAUDE_CODE_SESSION_ID = REAL_SESSION;
     process.chdir(REAL_CWD);
   });
 
