@@ -248,6 +248,7 @@ describe('store round-trip', () => {
     expect(searchMessages(db, '2611')).toEqual([]);
     expect(searchMessages(db, '4417')).toEqual([]);
     expect(messagesInRange(db, 'old-build', 8, 10).map((m) => m.raw)).toEqual([summary, quote, echo]);
+    expectIndexInStep(db);
 
     const fresh = record('e4', 'user', echoText.replace('4417', '5523'), { sessionId: 'new-build' });
     writeFileSync(join(dir, 'echo.jsonl'), `${fresh}\n`);
@@ -288,12 +289,20 @@ describe('store round-trip', () => {
     db.close();
     const reopened = openDbAt(path);
     expect(retryTurns(reopened)).toEqual([0, 3, 4]);
+    expectIndexInStep(reopened);
     reopened.close();
   });
 });
 
 const bash = (id: string, command: string) => ({ type: 'tool_use', id, name: 'Bash', input: { command } });
 const result = (id: string, content: string) => ({ type: 'tool_result', tool_use_id: id, content });
+
+// SQLite's own check that the external-content index holds exactly one entry per message, with the
+// text the message holds. Archiving indexes every message, empty text included, so a clean that
+// drops an emptied row's entry leaves an archive SQLite reports as malformed.
+function expectIndexInStep(db: DatabaseSync): void {
+  expect(() => db.exec("INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)")).not.toThrow();
+}
 
 // A transcript record in the shape Claude Code writes. Unset fields are dropped by JSON.stringify.
 function record(

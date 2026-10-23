@@ -46,7 +46,9 @@ export function cleanIndex(db: DatabaseSync): void {
 }
 
 // An external-content index deletes an entry by the text it indexed, so the stored text is passed
-// back before it is replaced. The record itself is never touched.
+// back before it is replaced. Archiving indexes every message, empty text included, and SQLite
+// reports the archive as malformed when a message has no entry, so an emptied row is indexed too.
+// The record itself is never touched.
 function reindexer(db: DatabaseSync): Reindex {
   const unindex = db.prepare("INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', ?, ?)");
   const index = db.prepare('INSERT INTO messages_fts(rowid, text) VALUES (?, ?)');
@@ -55,7 +57,7 @@ function reindexer(db: DatabaseSync): Reindex {
     if (before === after) return;
     unindex.run(rowid, before);
     update.run(after, rowid);
-    if (after !== '') index.run(rowid, after);
+    index.run(rowid, after);
   };
 }
 
