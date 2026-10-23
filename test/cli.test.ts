@@ -146,6 +146,31 @@ describe('cli rendering', () => {
     db.close();
   });
 
+  // Search reads each match's session from `message_sessions`, which an older build does not know.
+  // Deleting the second session's rows leaves the state that build leaves: messages above the
+  // highest session row. It may write before this build opens the archive, or while a connection of
+  // this build that archives later is already open; the third session's records hold no "retry",
+  // so either way the page must be the two-session golden.
+  it('counts and lists the records an older build archived without their session rows, whether it wrote before this open or after it, so per-session counts never silently drop a session', () => {
+    const third = join(tempDir('seb-cli-third-'), 'third.jsonl');
+    writeFileSync(third, `${JSON.stringify({
+      type: 'user', uuid: 't3-u0', sessionId: 'fix-third', timestamp: '2026-08-30T12:00:00.000Z',
+      message: { role: 'user', content: 'Rename the queue worker module.' },
+    })}\n`);
+    for (const writesLater of [false, true]) {
+      const path = join(tempDir('seb-cli-stale-'), 'sebastian.db');
+      const db = openDbAt(path);
+      archiveFixture(db, FIXTURE);
+      archiveFixture(db, secondSession());
+      db.prepare("DELETE FROM message_sessions WHERE session_id = 'fix-second'").run();
+      if (writesLater) archiveFixture(db, third);
+      db.close();
+      const reopened = openDbAt(path);
+      expect(search(reopened, ['retry'])).toBe(golden('cli-search-no-caller.txt'));
+      reopened.close();
+    }
+  });
+
   // "nonexistentword" matches nothing, so no record holds both terms. Partial matches on the first
   // term would answer a different question; the per-word counts show which word to drop. Turn 4 is
   // the only record holding both `read` and `properties`, so the hyphenated term counts as one word

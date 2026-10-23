@@ -5,7 +5,7 @@ import {
   archiveDelta, clearPending, logEvent, pendingCycles, persistVerdicts, recordCycle, recordedCycles,
   stampReconciled,
 } from '../store/db.js';
-import { extractAnchors } from '../transcript/anchors.js';
+import { extractAnchors, type Anchor } from '../transcript/anchors.js';
 import { reconcile } from './reconcile.js';
 
 // The cycle the running compaction closes, read off the transcript rather than off a clock.
@@ -26,6 +26,8 @@ export interface CycleInput {
   boundary: Boundary;
   sessionId: string;
   trigger: string | null;
+  // Every anchor of the transcript, already archived together with `events`.
+  anchors: Anchor[];
 }
 
 export interface CycleResult {
@@ -40,19 +42,17 @@ export interface CycleResult {
 // The one place a cycle is recorded and judged, shared by the hook that observes a compaction and
 // by the recovery paths that find one already past.
 //
-// Archiving precedes reconciliation: verdicts can only be persisted onto anchor rows that exist,
-// and the records compaction appends — the boundary, the summary, the restorations — land after
-// PreCompact ran.
+// The caller archives first: verdicts can only be persisted onto anchor rows that exist, and the
+// records compaction appends — the boundary, the summary, the restorations — land after PreCompact
+// ran.
 export function reconcileOneCycle(db: DatabaseSync, input: CycleInput): CycleResult {
-  const { events, boundary, sessionId, trigger } = input;
+  const { events, boundary, sessionId, trigger, anchors } = input;
   const summary = readSummary(events, boundary);
   recordCycle(db, {
     sessionId, cycle: boundary.cycle, trigger, summary, compactionMs: boundary.durationMs,
     preTokens: boundary.preTokens, postTokens: boundary.postTokens,
     cumulativeDroppedTokens: boundary.cumulativeDroppedTokens,
   });
-  const anchors = extractAnchors(events);
-  archiveDelta(db, events, anchors);
 
   const mine = anchors.filter((a) => a.cycle === boundary.cycle);
   if (summary === null) {
@@ -70,21 +70,36 @@ export function reconcileOneCycle(db: DatabaseSync, input: CycleInput): CycleRes
 // cycle whose summary can never be found. A list keyed on anchors with null verdicts would never
 // terminate, since such a cycle stays unverdicted forever.
 //
-export function catchUp(db: DatabaseSync, events: TranscriptEvent[], sessionId: string): CycleResult[] {
+// The transcript is archived once for all the stranded cycles together. A caller that passes
+// `anchors` has already archived `events` with them, so nothing is archived again.
+export function catchUp(
+  db: DatabaseSync, events: TranscriptEvent[], sessionId: string, anchors?: Anchor[],
+): CycleResult[] {
   const recorded = recordedCycles(db, sessionId);
-  return readBoundaries(events)
-    .filter((b) => !recorded.has(b.cycle))
-    .map((boundary) => {
-      const result = reconcileOneCycle(db, { events, boundary, sessionId, trigger: boundary.trigger });
-      clearPending(db, sessionId, boundary.cycle);
-      return result;
+  const stranded = readBoundaries(events).filter((b) => !recorded.has(b.cycle));
+  if (stranded.length === 0) return [];
+  const archived = anchors ?? archive(db, events);
+  return stranded.map((boundary) => {
+    const result = reconcileOneCycle(db, {
+      events, boundary, sessionId, trigger: boundary.trigger, anchors: archived,
     });
+    clearPending(db, sessionId, boundary.cycle);
+    return result;
+  });
+}
+
+function archive(db: DatabaseSync, events: TranscriptEvent[]): Anchor[] {
+  const anchors = extractAnchors(events);
+  archiveDelta(db, events, anchors);
+  return anchors;
 }
 
 // Runs catch-up and logs one line per recovered cycle under the calling hook's name: an earlier
 // compaction never closed, and the count is how a reader tells a recovered backlog from a quiet one.
-export function logCatchUp(db: DatabaseSync, hook: string, events: TranscriptEvent[], sessionId: string): void {
-  for (const r of catchUp(db, events, sessionId)) {
+export function logCatchUp(
+  db: DatabaseSync, hook: string, events: TranscriptEvent[], sessionId: string, anchors?: Anchor[],
+): void {
+  for (const r of catchUp(db, events, sessionId, anchors)) {
     const detail = r.summarized ? `${r.verdicts} verdicts persisted` : 'no summary found; verdicts left NULL';
     logEvent(db, hook, r.summarized ? 'info' : 'warn', `recovered cycle ${r.cycle}: ${detail}`);
   }

@@ -60,9 +60,25 @@ describe('store round-trip', () => {
     db.close();
   });
 
-  it('re-archiving the same delta adds zero rows and leaves the FTS index single-entry, so a refused compaction re-firing PreCompact cannot grow the archive', () => {
-    const { db, events, anchors } = freshArchive();
+  // Archiving skips every key the session already holds before it inserts. The first five records
+  // (turns 0 to 4) carry five of the nine anchors, so the full delta must still add the other four
+  // records and four anchors, and a repeat of it must add nothing and change no byte.
+  it('re-archiving a grown delta adds exactly the new rows and a repeat leaves every row byte-identical and the FTS index single-entry, so a refused compaction re-firing PreCompact cannot grow the archive', () => {
+    const events = parseTranscript(FIXTURE);
+    const anchors = extractAnchors(events);
+    const db = tempDb('seb-rearchive-');
+    expect(archiveDelta(db, events.slice(0, 5), anchors)).toEqual({ messages: 5, anchors: 5 });
+    expect(archiveDelta(db, events, anchors)).toEqual({ messages: 4, anchors: 4 });
+    const snapshot = () => ({
+      messages: db.prepare('SELECT rowid, * FROM messages ORDER BY rowid').all(),
+      anchors: db.prepare('SELECT rowid, * FROM anchors ORDER BY rowid').all(),
+      sessions: db.prepare('SELECT rowid, session_id FROM message_sessions ORDER BY rowid').all(),
+      index: db.prepare('SELECT id, block FROM messages_fts_data ORDER BY id').all(),
+    });
+    const before = snapshot();
+    expect(before.sessions).toHaveLength(9);
     expect(archiveDelta(db, events, anchors)).toEqual({ messages: 0, anchors: 0 });
+    expect(snapshot()).toEqual(before);
 
     // A double-fed external-content FTS index would return the same record twice.
     expect(searchMessages(db, 'exponential backoff')).toHaveLength(1);
@@ -193,7 +209,8 @@ describe('store round-trip', () => {
         turn INTEGER NOT NULL, ts TEXT, role TEXT, record TEXT NOT NULL);
       CREATE VIRTUAL TABLE messages_fts USING fts5(record, content='messages', content_rowid='rowid');
       CREATE TABLE anchors (id TEXT NOT NULL, uuid TEXT NOT NULL, session_id TEXT NOT NULL, cycle INTEGER NOT NULL,
-        turn INTEGER NOT NULL, type TEXT NOT NULL, key TEXT NOT NULL, excerpt TEXT NOT NULL, PRIMARY KEY (session_id, id));
+        turn INTEGER NOT NULL, type TEXT NOT NULL, key TEXT NOT NULL, excerpt TEXT NOT NULL, verdict TEXT, score REAL,
+        PRIMARY KEY (session_id, id));
       CREATE VIRTUAL TABLE anchors_fts USING fts5(key, excerpt, content='anchors', content_rowid='rowid');
     `);
     const insert = before.prepare(

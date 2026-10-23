@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { logEvent, markPending, recordedCycles } from '../store/db.js';
 import { targetCycle } from '../reconcile/cycle.js';
-import { parseTranscript, transcriptSession } from '../transcript/parse.js';
+import { parseTranscript, scanBoundaries, transcriptSession } from '../transcript/parse.js';
 import { str } from '../transcript/text.js';
 import { resolveTranscript, type Payload } from './runHook.js';
 
@@ -17,8 +17,11 @@ export function postCompact(db: DatabaseSync, payload: Payload): string {
   const path = resolveTranscript(payload);
   if (path === null) return warn(db, 'no transcript to reconcile');
 
-  const events = parseTranscript(path);
-  const sessionId = str(payload.session_id) ?? transcriptSession(events) ?? '';
+  // The cycle number needs only the boundaries. A payload with no session id needs every record,
+  // because the session is then read off the transcript.
+  const declared = str(payload.session_id);
+  const events = declared === null || declared === '' ? parseTranscript(path) : scanBoundaries(path);
+  const sessionId = declared ?? transcriptSession(events) ?? '';
   if (sessionId === '') return warn(db, 'no session id; cannot mark the cycle pending');
 
   const cycle = targetCycle(recordedCycles(db, sessionId), events);

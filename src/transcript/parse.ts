@@ -45,6 +45,29 @@ export function parseTranscript(path: string): TranscriptEvent[] {
   return events;
 }
 
+const BOUNDARY_TOKEN = Buffer.from('"compact_boundary"');
+const NEWLINE = 0x0a;
+
+// The boundary records alone, found by a byte search instead of a full parse. Only the lines that
+// hold the token are decoded, and each must still pass `isBoundary`, so a mention in ordinary text
+// never counts; inside a string the quotes are escaped and do not match the token at all. A kept
+// event's cycle is the number of boundaries before it, as `parseTranscript` assigns. Its turn is
+// not computed and reads 0.
+export function scanBoundaries(path: string): TranscriptEvent[] {
+  const bytes = readFileSync(path);
+  const boundaries: TranscriptEvent[] = [];
+  let hit = bytes.indexOf(BOUNDARY_TOKEN);
+  while (hit !== -1) {
+    const start = bytes.lastIndexOf(NEWLINE, hit) + 1;
+    const newline = bytes.indexOf(NEWLINE, hit);
+    const end = newline === -1 ? bytes.length : newline;
+    const event = toEvent(0, boundaries.length, bytes.toString('utf8', start, end));
+    if (isBoundary(event)) boundaries.push(event);
+    hit = bytes.indexOf(BOUNDARY_TOKEN, end);
+  }
+  return boundaries;
+}
+
 export function toEvent(turn: number, cycle: number, raw: string): TranscriptEvent {
   const record = parseLine(raw);
   const message = obj(record?.message);

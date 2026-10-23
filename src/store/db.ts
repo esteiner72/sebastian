@@ -6,6 +6,7 @@ import { parseLine, type TranscriptEvent } from '../transcript/parse.js';
 import type { Anchor, AnchorType } from '../transcript/anchors.js';
 import { messageText, sebCallIds } from '../transcript/text.js';
 import { cleanIndex } from './clean.js';
+import { fillMessageSessions } from './sessions.js';
 import type { Verdict } from '../reconcile/reconcile.js';
 
 // Matches Claude Code's own project-directory slug: every non-alphanumeric byte becomes a dash.
@@ -48,6 +49,7 @@ export function openDbAt(path: string): DatabaseSync {
   migrateColumns(db);
   migrateMessageIndex(db, schema);
   cleanIndex(db);
+  fillMessageSessions(db);
   chmodSync(path, 0o600);
   return db;
 }
@@ -124,20 +126,25 @@ function extractArchivedText(db: DatabaseSync): void {
 interface ArchiveStatements {
   message: ReturnType<DatabaseSync['prepare']>;
   messageFts: ReturnType<DatabaseSync['prepare']>;
+  messageSession: ReturnType<DatabaseSync['prepare']>;
   anchor: ReturnType<DatabaseSync['prepare']>;
 }
 
 // One transaction per delta. Message dedupe rides the uuid primary key, anchor dedupe rides
-// (session_id, id), both via INSERT OR IGNORE. A message's index row is written only when its base
-// insert actually added a row and is keyed on that row's rowid, so re-archiving the same delta
-// leaves the index untouched. Messages go first: anchors carry a foreign key into them. Sebastian's
-// own retrieval calls in the delta, and the results that answer them, are archived with no text.
+// (session_id, id), both via INSERT OR IGNORE. A message's index row and its `message_sessions` row
+// are written only when its base insert actually added a row, keyed on that row's rowid, so
+// re-archiving the same delta leaves both untouched. Messages go first: anchors carry a foreign key
+// into them. Sebastian's own retrieval calls in the delta, and the results that answer them, are
+// archived with no text.
 //
 // The two lists are derived independently — anchor extraction needs whole-file context for turn
 // numbering and pending-question state, while a hook archives only a delta — so an anchor can name
 // a message that is neither in this delta nor already archived. Such an anchor is skipped and
 // counted out of the return value, because the foreign key would otherwise roll the whole delta
 // back and lose one compaction's archive entirely.
+//
+// The transaction opens by filling any `message_sessions` rows an older build left out since this
+// connection opened, so the rows this delta adds never sit above a gap the next fill cannot see.
 export function archiveDelta(
   db: DatabaseSync,
   events: TranscriptEvent[],
@@ -149,17 +156,22 @@ export function archiveDelta(
         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ),
     messageFts: db.prepare('INSERT INTO messages_fts (rowid, text) VALUES (?, ?)'),
+    messageSession: db.prepare('INSERT INTO message_sessions (rowid, session_id) VALUES (?, ?)'),
     anchor: db.prepare(
       'INSERT OR IGNORE INTO anchors (id, uuid, session_id, cycle, turn, type, key, excerpt) ' +
         'SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM messages WHERE uuid = ?)',
     ),
   };
   const skip = sebCallIds(events.map((e) => e.record));
+  const held = archivedKeys(db, events, anchors);
+  const newEvents = events.filter((e) => e.uuid === null || !held.uuids.has(e.uuid));
+  const newAnchors = anchors.filter((a) => held.anchorIds.get(a.sessionId)?.has(a.id) !== true);
   db.exec('BEGIN');
   try {
+    fillMessageSessions(db);
     const counts = {
-      messages: events.reduce((n, e) => n + insertMessage(stmts, e, skip), 0),
-      anchors: anchors.reduce((n, a) => n + insertAnchor(stmts, a), 0),
+      messages: newEvents.reduce((n, e) => n + insertMessage(stmts, e, skip), 0),
+      anchors: newAnchors.reduce((n, a) => n + insertAnchor(stmts, a), 0),
     };
     db.exec('COMMIT');
     return counts;
@@ -167,6 +179,27 @@ export function archiveDelta(
     db.exec('ROLLBACK');
     throw err;
   }
+}
+
+interface ArchivedKeys {
+  uuids: Set<string>;
+  anchorIds: Map<string, Set<string>>;   // anchor ids by session
+}
+
+// What the delta's sessions already hold, read before the transaction. Skipping these keys spares
+// only the primary-key lookup INSERT OR IGNORE would spend discarding them, and on a cold cache
+// those lookups are most of the archive step. Both lists are needed: with messages alone, the cold
+// reads move into the anchors' EXISTS check. A uuid archived under another session is not listed,
+// and the primary key still dedupes it.
+function archivedKeys(db: DatabaseSync, events: TranscriptEvent[], anchors: Anchor[]): ArchivedKeys {
+  const uuidsOf = db.prepare('SELECT uuid FROM messages WHERE session_id = ?');
+  const idsOf = db.prepare('SELECT id FROM anchors WHERE session_id = ?');
+  const sessions = [...new Set(events.map((e) => e.sessionId ?? ''))];
+  const anchorSessions = [...new Set(anchors.map((a) => a.sessionId))];
+  return {
+    uuids: new Set(sessions.flatMap((s) => uuidsOf.all(s).map((r) => r.uuid as string))),
+    anchorIds: new Map(anchorSessions.map((s) => [s, new Set(idsOf.all(s).map((r) => r.id as string))])),
+  };
 }
 
 // Service records — mode, last-prompt, atis-latch, file-history-snapshot and their kin — carry no
@@ -178,11 +211,11 @@ export function archiveDelta(
 function insertMessage(stmts: ArchiveStatements, e: TranscriptEvent, skip: ReadonlySet<string>): number {
   if (e.uuid === null) return 0;
   const text = messageText(e.record, skip);
-  const result = stmts.message.run(
-    e.uuid, e.sessionId ?? '', e.cycle, e.turn, e.ts, e.role, e.raw, text,
-  );
+  const sessionId = e.sessionId ?? '';
+  const result = stmts.message.run(e.uuid, sessionId, e.cycle, e.turn, e.ts, e.role, e.raw, text);
   if (result.changes === 0) return 0;
   stmts.messageFts.run(result.lastInsertRowid, text);
+  stmts.messageSession.run(result.lastInsertRowid, sessionId);
   return 1;
 }
 
@@ -213,10 +246,20 @@ export interface MessageHit {
   anchors: { id: string; type: AnchorType }[];   // the anchors on this record, in extraction order
 }
 
+// A match joins `message_sessions` unless a filter reads a column that only `messages` holds, so
+// counting and narrowing by session never read the wide rows that hold whole records. Both tables
+// are aliased `m`, and the session filters read `m.session_id` from either.
 const FROM_MATCHED = 'FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid';
+const FROM_SESSIONS = 'FROM messages_fts JOIN message_sessions m ON m.rowid = messages_fts.rowid';
 
-// One page of the match, ordered by FTS rank. Each hit carries the anchors on its record, one
-// indexed lookup per page row.
+function matchSource(f: SearchFilters): string {
+  const needsMessages =
+    f.cycle !== undefined || f.turnRange !== undefined || f.role !== undefined || f.type !== undefined;
+  return needsMessages ? FROM_MATCHED : FROM_SESSIONS;
+}
+
+// One page of the match, ordered by FTS rank. The page is chosen first, and only the rows on it are
+// read from `messages`. Each hit carries the anchors on its record, one indexed lookup per page row.
 export function searchMessages(
   db: DatabaseSync,
   query: string,
@@ -224,20 +267,23 @@ export function searchMessages(
 ): MessageHit[] {
   const matched = matchClause(query, filters);
   if (matched === null) return [];
-  const sql =
-    'SELECT m.uuid, m.session_id, m.cycle, m.turn, m.role, m.text ' +
-    `${FROM_MATCHED} ${matched.where} ORDER BY rank LIMIT ?`;
+  const page = `SELECT messages_fts.rowid AS id ${matched.from} ${matched.where} ORDER BY rank LIMIT ?`;
+  const message = db.prepare('SELECT uuid, session_id, cycle, turn, role, text FROM messages WHERE rowid = ?');
   const anchorsOf = db.prepare('SELECT id, type FROM anchors WHERE uuid = ? ORDER BY rowid');
-  return db.prepare(sql).all(...matched.params, clampLimit(filters.limit)).map((row) => ({
-    sessionId: row.session_id as string,
-    cycle: Number(row.cycle),
-    turn: Number(row.turn),
-    role: (row.role as string | null) ?? null,
-    text: (row.text as string | null) ?? '',
-    anchors: anchorsOf
-      .all(row.uuid as string)
-      .map((a) => ({ id: a.id as string, type: a.type as AnchorType })),
-  }));
+  return db.prepare(page).all(...matched.params, clampLimit(filters.limit)).flatMap((hit) => {
+    const row = message.get(hit.id as number);
+    if (row === undefined) return [];
+    return [{
+      sessionId: row.session_id as string,
+      cycle: Number(row.cycle),
+      turn: Number(row.turn),
+      role: (row.role as string | null) ?? null,
+      text: (row.text as string | null) ?? '',
+      anchors: anchorsOf
+        .all(row.uuid as string)
+        .map((a) => ({ id: a.id as string, type: a.type as AnchorType })),
+    }];
+  });
 }
 
 // The size of the whole match per session, not of the page, most hits first and then by session
@@ -251,12 +297,23 @@ export function sessionCounts(
   const matched = matchClause(query, filters);
   if (matched === null) return [];
   const sql =
-    `SELECT m.session_id, COUNT(*) AS n ${FROM_MATCHED} ${matched.where} ` +
+    `SELECT m.session_id, COUNT(*) AS n ${matched.from} ${matched.where} ` +
     'GROUP BY m.session_id ORDER BY n DESC, m.session_id';
   return db.prepare(sql).all(...matched.params).map((row) => ({
     sessionId: row.session_id as string,
     hits: Number(row.n),
   }));
+}
+
+// The size of the whole match, over every session. With no filter the index alone answers it,
+// without reading a row of any table it points at.
+export function countMatches(db: DatabaseSync, query: string, filters: SearchFilters = {}): number {
+  const matched = matchClause(query, filters);
+  if (matched === null) return 0;
+  const unfiltered = matched.from === FROM_SESSIONS && filters.sessionId === undefined &&
+    filters.excludeSessionId === undefined;
+  const from = unfiltered ? 'FROM messages_fts' : matched.from;
+  return Number(db.prepare(`SELECT COUNT(*) AS n ${from} ${matched.where}`).get(...matched.params)?.n ?? 0);
 }
 
 // The query's searchable tokens: runs of letters, digits and underscores. The class is
@@ -278,12 +335,12 @@ export function ftsMatch(query: string): string | null {
   return quoted.join(' ');
 }
 
-// Filters compile to plain WHERE clauses on the joined base table; `type` is a membership test on
-// the anchors of the record.
+// Filters compile to plain WHERE clauses on the joined table; `type` is a membership test on the
+// anchors of the record.
 function matchClause(
   query: string,
   filters: SearchFilters,
-): { where: string; params: SQLInputValue[] } | null {
+): { from: string; where: string; params: SQLInputValue[] } | null {
   const match = ftsMatch(query);
   if (match === null) return null;
   let where = 'WHERE messages_fts MATCH ?';
@@ -303,7 +360,7 @@ function matchClause(
     where += ' AND EXISTS (SELECT 1 FROM anchors x WHERE x.uuid = m.uuid AND x.type = ?)';
     params.push(filters.type);
   }
-  return { where, params };
+  return { from: matchSource(filters), where, params };
 }
 
 // SQLite reads a negative LIMIT as no limit at all, so a limit that arrives from a command line is

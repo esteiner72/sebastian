@@ -2,20 +2,20 @@ import type { DatabaseSync } from 'node:sqlite';
 import { archiveDelta, logEvent } from '../store/db.js';
 import { logCatchUp } from '../reconcile/cycle.js';
 import { computeSteering } from '../steer/adapt.js';
-import { extractAnchors } from '../transcript/anchors.js';
+import { extractAnchors, type Anchor } from '../transcript/anchors.js';
 import {
   parseTranscript, readBoundaries, transcriptSession, type TranscriptEvent,
 } from '../transcript/parse.js';
 import { str } from '../transcript/text.js';
 import { resolveTranscript, type Payload } from './runHook.js';
 
-// Three jobs, in this order: reconcile any cycle a previous run left stranded, archive the
-// transcript delta, then return the steering block that Claude Code appends to the summarizer's
-// compact instructions.
+// Three jobs, in this order: archive the transcript delta, reconcile any cycle a previous run left
+// stranded, then return the steering block that Claude Code appends to the summarizer's compact
+// instructions.
 //
-// Catch-up lives here because this hook already parses the transcript, so recovery costs one pass
-// over records already in memory and no extra I/O. It also runs before steering is computed, so a
-// recovered cycle's verdicts reach the drop-rates this compaction is about to be steered by.
+// Catch-up lives here because this hook already parses and archives the transcript, so recovery
+// reuses those records and anchors and adds no extra I/O. It also runs before steering is computed,
+// so a recovered cycle's verdicts reach the drop-rates this compaction is about to be steered by.
 //
 // No cycle row is written here. PreCompact fires before compaction is decided — a session with too
 // few messages to compact still runs this hook — so cycle bookkeeping belongs to PostCompact, or
@@ -31,8 +31,9 @@ export function preCompact(db: DatabaseSync, payload: Payload): string {
     return withPrecedence(computeSteering(db, null), payload);
   }
   const events = parseTranscript(path);
-  recover(db, events, str(payload.session_id) ?? transcriptSession(events));
-  const counts = archiveDelta(db, events, extractAnchors(events));
+  const anchors = extractAnchors(events);
+  const counts = archiveDelta(db, events, anchors);
+  recover(db, events, str(payload.session_id) ?? transcriptSession(events), anchors);
   logEvent(
     db,
     'pre-compact',
@@ -43,9 +44,11 @@ export function preCompact(db: DatabaseSync, payload: Payload): string {
   return withPrecedence(computeSteering(db, readBoundaries(events).length), payload);
 }
 
-function recover(db: DatabaseSync, events: TranscriptEvent[], sessionId: string | null): void {
+function recover(
+  db: DatabaseSync, events: TranscriptEvent[], sessionId: string | null, anchors: Anchor[],
+): void {
   if (sessionId === null || sessionId === '') return;
-  logCatchUp(db, 'pre-compact', events, sessionId);
+  logCatchUp(db, 'pre-compact', events, sessionId, anchors);
 }
 
 // The argument to `/compact <text>` arrives as custom_instructions, and steering must never

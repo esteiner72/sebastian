@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
-import { dbPath, latestCycle, openDb, projectSlug } from '../src/store/db.js';
+import { archiveDelta, dbPath, latestCycle, openDb, openDbAt, projectSlug } from '../src/store/db.js';
 import { renderForgottenIndex } from '../src/reconcile/render.js';
-import { readSummary } from '../src/reconcile/cycle.js';
+import { catchUp, readSummary } from '../src/reconcile/cycle.js';
+import { extractAnchors } from '../src/transcript/anchors.js';
 import { parseTranscript, readBoundaries } from '../src/transcript/parse.js';
 import { runHook } from '../src/hooks/runHook.js';
 import { reconcileCommand } from '../src/cli/reconcile.js';
@@ -29,6 +30,7 @@ afterAll(() => {
 
 const TS = '2026-08-31T12:00:00.000Z';
 const SEVEN_TYPES = fileURLToPath(new URL('./fixtures/seven-types.jsonl', import.meta.url));
+const BOUNDARY = fileURLToPath(new URL('./fixtures/boundary.jsonl', import.meta.url));
 const STEERING_BASE = fileURLToPath(new URL('./golden/steering-base.txt', import.meta.url));
 // The block a hook prints when it has no transcript to count boundaries in: the same lines, with a
 // marker that cannot name the cycle.
@@ -575,6 +577,61 @@ describe('degraded hook payloads', () => {
     expect(anchorIds(db, "WHERE verdict = 'kept'")).toEqual(['t7u1']);
     expect(reconcileCommand(db, [])).toBe('Nothing to reconcile: every closed cycle has a row.\n');
     db.close();
+  });
+
+  // PreCompact archives first and hands its anchors to catch-up; UserPromptSubmit and `seb reconcile`
+  // let catch-up archive. Both cycles of boundary.jsonl are stranded. Cycle 0 holds t0u1, whose
+  // record u0 b6 preserved, so it is kept at 1. Cycle 1 holds t14u1 and has no summary after b15,
+  // so it is recorded unreconciled with its verdict NULL. The fixture's 15 records with a uuid are
+  // archived once in every case. A caller that hands anchors over has archived exactly those, so
+  // handing over t0u1 alone makes a second archive visible: it would add t14u1.
+  it('reconciles each stranded cycle against its own anchors, and archives the same rows whether catch-up archives or its caller already did', () => {
+    const events = parseTranscript(BOUNDARY);
+    const fresh = (prefix: string) => openDbAt(join(mkdtempSync(join(tmpdir(), prefix)), 'sebastian.db'));
+    const state = (db: DatabaseSync) => ({
+      messages: count(db, 'FROM messages'),
+      anchors: db.prepare('SELECT id, cycle, verdict, score FROM anchors ORDER BY rowid').all(),
+      cycles: db.prepare(
+        'SELECT cycle, trigger, summary, reconciled_at IS NOT NULL AS reconciled FROM cycles ORDER BY cycle',
+      ).all(),
+    });
+    const expected = {
+      messages: 15,
+      anchors: [
+        { id: 't0u1', cycle: 0, verdict: 'kept', score: 1 },
+        { id: 't14u1', cycle: 1, verdict: null, score: null },
+      ],
+      cycles: [
+        { cycle: 0, trigger: 'manual', summary: '1. Primary Request and Intent: Refactor the parser module.', reconciled: 1 },
+        { cycle: 1, trigger: 'auto', summary: null, reconciled: 0 },
+      ],
+    };
+    const results = [
+      { cycle: 0, anchors: 1, verdicts: 1, summarized: true },
+      { cycle: 1, anchors: 1, verdicts: 0, summarized: false },
+    ];
+
+    const alone = fresh('seb-catchup-alone-');
+    expect(catchUp(alone, events, 'fix-boundary')).toEqual(results);
+    expect(state(alone)).toEqual(expected);
+    alone.close();
+
+    const handed = fresh('seb-catchup-handed-');
+    const anchors = extractAnchors(events);
+    archiveDelta(handed, events, anchors);
+    expect(catchUp(handed, events, 'fix-boundary', anchors)).toEqual(results);
+    expect(state(handed)).toEqual(expected);
+    handed.close();
+
+    const partial = fresh('seb-catchup-partial-');
+    const first = anchors.filter((a) => a.id === 't0u1');
+    archiveDelta(partial, events, first);
+    expect(catchUp(partial, events, 'fix-boundary', first)).toEqual([
+      { cycle: 0, anchors: 1, verdicts: 1, summarized: true },
+      { cycle: 1, anchors: 0, verdicts: 0, summarized: false },
+    ]);
+    expect(state(partial)).toEqual({ ...expected, anchors: [expected.anchors[0]] });
+    partial.close();
   });
 
   // A cycle whose summary never landed can never earn verdicts. Keyed on anchors with null

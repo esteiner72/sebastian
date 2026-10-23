@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractAnchors, type Anchor } from '../src/transcript/anchors.js';
-import { parseTranscript, readBoundaries } from '../src/transcript/parse.js';
+import { isBoundary, parseTranscript, readBoundaries, scanBoundaries } from '../src/transcript/parse.js';
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 const extract = (name: string) => extractAnchors(parseTranscript(fixture(name)));
@@ -81,6 +81,16 @@ describe('boundary fixture', () => {
       preservedUuids: new Set(['u14']),
       restoredPaths: new Set(['/repo/src/parser/lex.ts']),
     });
+  });
+
+  // PostCompact numbers the pending cycle from a byte search, not from the parse every other hook
+  // uses. b6 is the first boundary in the file and b15 the second, so they close cycles 0 and 1.
+  it('finds by byte search exactly the boundaries and cycle numbers the full parse finds, so PostCompact never marks the wrong cycle pending', () => {
+    const scanned = scanBoundaries(fixture('boundary.jsonl'));
+    expect(scanned.map((e) => [e.uuid, e.cycle])).toEqual([['b6', 0], ['b15', 1]]);
+    const parsed = parseTranscript(fixture('boundary.jsonl')).filter(isBoundary);
+    expect(scanned.map((e) => e.raw)).toEqual(parsed.map((e) => e.raw));
+    expect(scanBoundaries(fixture('seven-types.jsonl'))).toEqual([]);
   });
 
   it('survives a truncated final line, which still occupies its turn', () => {

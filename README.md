@@ -87,11 +87,17 @@ cycle justifies.
 | The cycle | What Sebastian injects |
 | --- | --- |
 | Nothing dropped | Nothing |
-| Something dropped | Up to 400 tokens: counts by type, one entry per type before a second of any, and one pointer |
+| Something dropped | About 400 tokens: counts by type, one entry per type before a second of any, and one pointer |
 | No summary reached Sebastian | The same index, labelled unreconciled, because nothing was checked |
 
 Within a type the most recent entry comes first, so the work nearest the compaction is the work
 the index names.
+
+On the author's archives, across 414 compactions, the index cost a median of 395 tokens, and nine
+in ten cost 431 or fewer. A one-line notice at session start adds about 35. The steering
+instructions, about 160 tokens, go to the summarizer with the compaction request rather than into
+your context. Other prompts inject nothing. A `seb` command prints at most 2,000 tokens, and only
+when the model runs one.
 
 The eval harness in `eval/` is a regression gate over a proxy: synthetic sessions with recorded
 summaries, scored on what the index recovers per token. Whether the index helps in live use is a
@@ -146,21 +152,45 @@ no command answers can be asked of the database directly with `sqlite3`.
 
 ## Performance
 
-Measured on a 29 MB, 13,044-record transcript with six compactions.
+Measured on the author's largest archive: about 200,000 messages (prompts, replies, tool calls
+and tool results) from 190 sessions over seven weeks, about 114 million tokens of conversation by
+Claude Code's own count. Hook times are measured inside the hook. Starting Node adds about 80 ms
+to each.
 
-| Path | Cost |
-| --- | --- |
-| `seb show` retrieval | 0.01ms |
-| `seb search`, 100k anchors | 0.06ms |
-| Forgotten Index render, 1600 drops | 2ms |
-| Archive one compaction delta | 150ms |
-| Hook on each prompt, no archive | 58ms |
-| Hook on each prompt, archive present | 62ms |
+Each figure is given twice where the two differ. Cold means the archive is not in the operating
+system's file cache, for example after a restart or when the project has been idle. Warm means it
+is, for example right after another hook in the same project. Real use falls between the two.
+
+A typical compaction covers about 450 messages, about 368,000 tokens of context. Hook time
+depends on how much the compaction archives and on how long the session's transcript has grown.
+
+| Path | Typical compaction, early in a session | Typical compaction, late in a long session | Very large compaction |
+| --- | --- | --- | --- |
+| Before compaction: archive and steer | 430–440 ms cold, about 225 ms warm | 520–570 ms cold, 360–400 ms warm | 2.2–2.4 s cold, 1.5–1.7 s warm |
+| After compaction: check the summary | 30–40 ms cold, 10–15 ms warm | about 50 ms cold, about 30 ms warm | about 80 ms cold, about 60 ms warm |
+| Session start after compaction | under 10 ms | under 10 ms | under 10 ms |
+| First prompt after compaction | 70–80 ms | 260–330 ms | 600–660 ms |
+| Every other prompt | under 10 ms | under 10 ms | under 10 ms |
+
+Late in a long session means a fifth compaction with a 60 MB transcript. A very large compaction
+archives about 5,000 messages at once, which happens when most of a session was never archived in
+this project, for example because it ran in another directory or worktree.
+
+| Command | Cold | Warm |
+| --- | --- | --- |
+| `seb search` | 130–310 ms; up to 600 ms for a word as common as "the" | 80–125 ms; up to 270 ms |
+| `seb search` when no message holds every word | under 110 ms | under 90 ms |
+| `seb show`, including a 1 MB tool result | under 100 ms | under 100 ms |
+| First open by a new version, which builds its search and steering tables once | about 2 s | about 0.4 s |
+
+Command times include starting Node. Before compaction, most of the time goes to reading the
+transcript and writing the new messages, so it grows with the compaction rather than with the
+archive.
 
 Sebastian injects on your next prompt after a compaction, so it registers a `UserPromptSubmit` hook.
-Every prompt then starts a short-lived Node process, which is the cost above, and you pay it in
-every project once the plugin is installed. A project with no archive exits before it opens a
-database, so Sebastian still creates nothing until your first compaction.
+Every prompt then starts a short-lived Node process, about 70 to 90 ms including Node startup, and
+you pay it in every project once the plugin is installed. A project with no archive exits before
+it opens a database, so Sebastian still creates nothing until your first compaction.
 
 ## Privacy
 

@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS messages (   -- durability past cleanupPeriodDays; PK
   text       TEXT                       -- what the record said or saw; see messageText
 );
 
+-- Search counts read a match's session here rather than from `messages`, whose rows hold whole
+-- records. Archiving writes a row beside each message, and every open fills the rows an older
+-- build left out; see fillMessageSessions.
+CREATE TABLE IF NOT EXISTS message_sessions (   -- session of each message row, for search counts
+  rowid      INTEGER PRIMARY KEY,                 -- messages.rowid
+  session_id TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS anchors (
   id         TEXT NOT NULL,             -- session-local, t{turn}{typeLetter}{ordinal}
   uuid       TEXT NOT NULL REFERENCES messages(uuid),
@@ -119,4 +127,5 @@ CREATE INDEX IF NOT EXISTS messages_session_turn ON messages(session_id, turn); 
 CREATE INDEX IF NOT EXISTS messages_cycle_turn   ON messages(cycle, turn);       -- seb show <cycle:turn>
 CREATE INDEX IF NOT EXISTS anchors_id            ON anchors(id);                 -- seb show on an unqualified anchor id
 CREATE INDEX IF NOT EXISTS anchors_session_cycle ON anchors(session_id, cycle, turn);  -- the injected index, in turn order
+CREATE INDEX IF NOT EXISTS anchors_verdict_type  ON anchors(verdict, type);      -- the steering drop-rates
 CREATE INDEX IF NOT EXISTS anchors_uuid          ON anchors(uuid, type);           -- the anchors on a search hit, and --type

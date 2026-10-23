@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  logTelemetry, MAX_LIMIT, queryTokens, searchMessages, sessionCounts, sessionsMatching,
+  countMatches, logTelemetry, MAX_LIMIT, queryTokens, searchMessages, sessionCounts, sessionsMatching,
   type MessageHit, type SearchFilters,
 } from '../store/db.js';
 import type { AnchorType } from '../transcript/anchors.js';
@@ -210,7 +210,7 @@ function zeroResult(db: DatabaseSync, query: string, filters: SearchFilters): st
   const under = scope === '' ? '' : ` under ${scope}`;
   const terms = uniqueTerms(query);
   if (terms.length < 2) return `No records match "${query}"${under}.\n`;
-  const counts = terms.map((t) => `${t} ${sessionCounts(db, t, filters).reduce((n, c) => n + c.hits, 0)}`);
+  const counts = terms.map((t) => `${t} ${countMatches(db, t, filters)}`);
   const label = scope === '' ? 'Records per word' : 'Records per word, under the same filters';
   const drop = scope === '' ? 'Drop words' : 'Drop words or filters';
   return (
