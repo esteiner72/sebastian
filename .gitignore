@@ -23,6 +23,7 @@ yarn-error.log*
 # Local Claude Code config
 CLAUDE.local.md
 .claude/settings.local.json
+.claude/worktrees/
 
 # Approved specs, kept local
 docs/specs/
