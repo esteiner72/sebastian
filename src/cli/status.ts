@@ -5,13 +5,15 @@ import {
   storeStats, undeliveredCycles, type HookStat,
 } from '../store/db.js';
 import { computeSteering } from '../steer/adapt.js';
+import { armFor } from '../reconcile/arm.js';
 import { capOutput, OUTPUT_TOKENS, plural } from './output.js';
 import { usageWrap } from './args.js';
 
 // What the loop knows about this project: how much is archived, how much of it is reconciled, and
 // the steering block the next compaction will print. Steering is the loop's only visible output at
 // compaction time, so seeing it before a compaction is how a reader checks the loop is adapting.
-export function status(db: DatabaseSync, argv: string[]): string {
+// The block is the calling session's experiment arm, or the index arm from a plain terminal.
+export function status(db: DatabaseSync, argv: string[], caller?: string): string {
   usageWrap(() => parseArgs({ args: argv, options: {} }));
   const stats = storeStats(db);
   const cycle = newestReconciledCycle(db);
@@ -30,7 +32,8 @@ export function status(db: DatabaseSync, argv: string[]): string {
     latestLine(cycle),
     '',
   ];
-  return capOutput(`${lines.join('\n')}\n${computeSteering(db, null)}`, OUTPUT_TOKENS);
+  const arm = caller === undefined ? 'index' : armFor(caller);
+  return capOutput(`${lines.join('\n')}\n${computeSteering(db, null, arm)}`, OUTPUT_TOKENS);
 }
 
 // Two conditions, each printed only while it holds, so neither can become permanent furniture.

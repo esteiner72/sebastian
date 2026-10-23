@@ -1,5 +1,6 @@
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite';
 import type { AnchorType } from '../transcript/anchors.js';
+import type { Arm } from '../reconcile/arm.js';
 
 // Printed on PreCompact stdout, which Claude Code appends to the summarizer's compact instructions.
 // The summarizer attributes that stdout to the user, so every line reads as a directive about the
@@ -9,16 +10,18 @@ import type { AnchorType } from '../transcript/anchors.js';
 // The summary itself has to name `seb`, or a reader never learns the archive exists. The pointer
 // names only the search, because whatever else it names is what a reader reaches for when a search
 // disappoints. The marker names the cycle this compaction creates when the caller knows it, so a
-// reader can retrieve a dropped turn with the handle as written.
-function baseLines(cycle: number | null): string[] {
-  return [
+// reader can retrieve a dropped turn with the handle as written. The pointer arm gets no index, so
+// it drops the line announcing one.
+function baseLines(cycle: number | null, arm: Arm): string[] {
+  const lines = [
     '## Compact Instructions',
     '- Preserve verbatim: file paths edited, error signatures, commands run, user decisions.',
     markerLine(cycle),
     '- State once, at the top of the summary, that dropped detail is searchable with ' +
       '`seb search <words>`.',
-    '- A Forgotten Index of dropped content will be injected; do not re-summarize archived material.',
   ];
+  if (arm === 'pointer') return lines;
+  return [...lines, '- A Forgotten Index of dropped content will be injected; do not re-summarize archived material.'];
 }
 
 function markerLine(cycle: number | null): string {
@@ -61,11 +64,12 @@ interface TypeRate {
 
 // Templates only, no model call: the same database state and cycle always print the same block. A
 // database with no verdicts yet prints the base lines alone. `cycle` is the one this compaction
-// creates, or null on a path with no transcript to count boundaries in.
-export function computeSteering(db: DatabaseSync, cycle: number | null): string {
+// creates, or null on a path with no transcript to count boundaries in. `arm` is the session's
+// experiment arm.
+export function computeSteering(db: DatabaseSync, cycle: number | null, arm: Arm): string {
   const retrievals = countRetrievals(db);
   const adaptive = earnedRates(db).map((r) => adaptiveLine(r, retrievals.get(r.type) ?? 0));
-  return `${[...baseLines(cycle), ...adaptive].join('\n')}\n`;
+  return `${[...baseLines(cycle, arm), ...adaptive].join('\n')}\n`;
 }
 
 // Drop-rate is the primary signal and is dense: every anchor of every type takes a verdict every

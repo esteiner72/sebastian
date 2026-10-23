@@ -8,6 +8,7 @@ import { messageText, sebCallIds } from '../transcript/text.js';
 import { cleanIndex } from './clean.js';
 import { fillMessageSessions } from './sessions.js';
 import type { Verdict } from '../reconcile/reconcile.js';
+import { armFor } from '../reconcile/arm.js';
 
 // Matches Claude Code's own project-directory slug: every non-alphanumeric byte becomes a dash.
 export function projectSlug(cwd: string): string {
@@ -68,6 +69,8 @@ const ADDED_COLUMNS: [table: string, column: string, type: string][] = [
   ['cycles', 'post_tokens', 'INTEGER'],
   ['cycles', 'cumulative_dropped_tokens', 'INTEGER'],
   ['messages', 'text', 'TEXT'],
+  ['cycles', 'arm', 'TEXT'],
+  ['telemetry', 'caller', 'TEXT'],
 ];
 
 function migrateColumns(db: DatabaseSync): void {
@@ -534,19 +537,20 @@ export interface CycleRecord {
 // A row here means compaction actually happened. It carries no reconcile timestamp: verdicts are
 // persisted after this write, so `reconciled_at` is stamped separately once they exist.
 //
-// The upsert touches only what a re-record can restate. `injected_tokens` and `injected_at` belong
+// The upsert touches only what a re-record can restate. `arm` is the session's experiment arm,
+// derived from its id, so a re-record restates it unchanged. `injected_tokens` and `injected_at` belong
 // to the injector and are left alone.
 export function recordCycle(db: DatabaseSync, c: CycleRecord): void {
   db.prepare(
     'INSERT INTO cycles (session_id, cycle, trigger, summary, compaction_ms, ' +
-      'pre_tokens, post_tokens, cumulative_dropped_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
+      'pre_tokens, post_tokens, cumulative_dropped_tokens, arm) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
       'ON CONFLICT (session_id, cycle) DO UPDATE SET ' +
       'trigger = excluded.trigger, summary = excluded.summary, compaction_ms = excluded.compaction_ms, ' +
       'pre_tokens = excluded.pre_tokens, post_tokens = excluded.post_tokens, ' +
-      'cumulative_dropped_tokens = excluded.cumulative_dropped_tokens',
+      'cumulative_dropped_tokens = excluded.cumulative_dropped_tokens, arm = excluded.arm',
   ).run(
     c.sessionId, c.cycle, c.trigger, c.summary, c.compactionMs,
-    c.preTokens, c.postTokens, c.cumulativeDroppedTokens,
+    c.preTokens, c.postTokens, c.cumulativeDroppedTokens, armFor(c.sessionId),
   );
 }
 
@@ -857,12 +861,13 @@ export function commandStats(db: DatabaseSync): CommandStat[] {
 // A command writes its telemetry row partway through its own body, so its duration is known only
 // after it returns. Only the rows this connection wrote are stamped: `seb report` writes none, and a
 // concurrent session's retrieval may have landed in between, so neither a newest-row nor an id-range
-// update would credit the duration to the right command.
-export function stampCommandMs(db: DatabaseSync, ms: number): void {
+// update would credit the duration to the right command. The calling session is stamped the same
+// way, so a model-issued retrieval can be attributed to its session; a plain terminal records NULL.
+export function stampCommand(db: DatabaseSync, ms: number, caller: string | undefined): void {
   const ids = writtenTelemetry.get(db) ?? [];
   if (ids.length === 0) return;
   const marks = ids.map(() => '?').join(', ');
-  db.prepare(`UPDATE telemetry SET ms = ? WHERE id IN (${marks})`).run(ms, ...ids);
+  db.prepare(`UPDATE telemetry SET ms = ?, caller = ? WHERE id IN (${marks})`).run(ms, caller ?? null, ...ids);
 }
 
 // The database plus its write-ahead log: the log holds committed rows that have not been

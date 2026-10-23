@@ -1,0 +1,4 @@
+## Compact Instructions
+- Preserve verbatim: file paths edited, error signatures, commands run, user decisions.
+- Prefer dropping prose over dropping identifiers; where you drop detail, write "[archived: seb show 0:N]" with N the turn, so the reader can retrieve it.
+- State once, at the top of the summary, that dropped detail is searchable with `seb search <words>`.

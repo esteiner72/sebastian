@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS cycles (
   pre_tokens      INTEGER,
   post_tokens     INTEGER,
   cumulative_dropped_tokens INTEGER,
+  arm             TEXT,                  -- the session's experiment arm, 'index' or 'pointer'
   PRIMARY KEY (session_id, cycle)
 );
 
@@ -92,7 +93,8 @@ CREATE TABLE IF NOT EXISTS telemetry (
   anchor_id   TEXT,
   hits        INTEGER,
   cycle       INTEGER,                  -- attributed, not observed; see above
-  ms          INTEGER                   -- whole-invocation duration, stamped after the command returns
+  ms          INTEGER,                  -- whole-invocation duration, stamped after the command returns
+  caller      TEXT                      -- the calling session, stamped with ms; NULL from a plain terminal
 );
 
 -- A compaction PostCompact could not close, handed to whichever hook next runs with the boundary on

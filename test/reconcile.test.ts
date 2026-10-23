@@ -5,6 +5,7 @@ import type { Anchor, AnchorType } from '../src/transcript/anchors.js';
 import { reconcile } from '../src/reconcile/reconcile.js';
 import type { Verdict } from '../src/reconcile/reconcile.js';
 import { renderForgottenIndex, renderUnreconciledIndex } from '../src/reconcile/render.js';
+import { armFor } from '../src/reconcile/arm.js';
 
 const golden = (name: string): string =>
   readFileSync(fileURLToPath(new URL(`./golden/${name}`, import.meta.url)), 'utf8');
@@ -155,5 +156,15 @@ describe('renderForgottenIndex', () => {
   it('renders the empty string when nothing was dropped, so a lossless cycle injects nothing', () => {
     const allKept = verdicts.map((v): Verdict => ({ ...v, verdict: 'kept' }));
     expect(renderForgottenIndex(allKept, anchors, 400)).toBe('');
+  });
+});
+
+// Arm golden, derived by hand with `printf '%s' <id> | shasum -a 256`: an even first byte is the
+// index arm. The experiment's arms are fixed for its whole run, so this catches any change to the
+// assignment that would silently merge two treatments.
+describe('experiment arms', () => {
+  it('keeps every session in the arm its id hashed to, so a code change cannot reshuffle the experiment mid-run', () => {
+    const lines = golden('arm-assignment.txt').trim().split('\n').map((l) => l.split(' '));
+    expect(lines.map(([id]) => `${id} ${armFor(id ?? '')}`)).toEqual(lines.map((l) => l.join(' ')));
   });
 });

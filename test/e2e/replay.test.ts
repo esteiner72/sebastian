@@ -45,7 +45,7 @@ describe('one compaction cycle, injection through retrieval', () => {
       const key = String(anchor?.key);
 
       // Before retrieval the summarizer is told only what the drop-rate earned.
-      const before = computeSteering(db, null);
+      const before = computeSteering(db, null, 'index');
       expect(before).toContain('keep every file path read');
       expect(before).not.toContain('Retrieved');
 
@@ -55,7 +55,7 @@ describe('one compaction cycle, injection through retrieval', () => {
       expect(show(db, [id])).toContain(key);
 
       // The retrieval is the signal the loop feeds forward.
-      expect(computeSteering(db, null)).toMatch(/keep every file path read\. Retrieved \d+× after being dropped\./);
+      expect(computeSteering(db, null, 'index')).toMatch(/keep every file path read\. Retrieved \d+× after being dropped\./);
       db.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

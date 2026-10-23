@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { logEvent, recordInjection, stampInjected, type CycleIndex } from '../store/db.js';
 import { renderForgottenIndex, renderUnreconciledIndex } from './render.js';
 import { estimateTokens } from '../transcript/text.js';
+import { armFor } from './arm.js';
 
 // One ceiling for every injection. The renderer fills it one type at a time, so a cycle that lost
 // a little spends a little, and a cycle that lost a lot still stops here.
@@ -26,11 +27,15 @@ export function additionalContext(event: string, text: string): string {
 //
 // A reconciled cycle injects what its drops earned. An unreconciled one lists the cycle's anchors
 // under the same ceiling, labelled so that nothing reads as a loss claim.
+//
+// A pointer-arm session gets no index. It is still rendered, so the log records what it would
+// have cost, and the cycle is stamped so the next prompt does not try again.
 export function deliverIndex(db: DatabaseSync, cycle: CycleIndex, hook: string, event: string): string {
   const text = cycle.reconciled
     ? renderForgottenIndex(cycle.verdicts, cycle.anchors, BUDGET)
     : renderUnreconciledIndex(cycle.anchors, BUDGET);
   const tokens = text === '' ? 0 : estimateTokens(text);
+  if (armFor(cycle.sessionId) === 'pointer') return withhold(db, cycle, hook, tokens);
   recordInjection(db, cycle.sessionId, cycle.cycle, tokens);
   stampInjected(db, cycle.sessionId, cycle.cycle);
   logEvent(
@@ -41,4 +46,11 @@ export function deliverIndex(db: DatabaseSync, cycle: CycleIndex, hook: string, 
       `${text.length} chars, ${tokens} tokens injected`,
   );
   return text === '' ? '' : additionalContext(event, text);
+}
+
+function withhold(db: DatabaseSync, cycle: CycleIndex, hook: string, tokens: number): string {
+  recordInjection(db, cycle.sessionId, cycle.cycle, 0);
+  stampInjected(db, cycle.sessionId, cycle.cycle);
+  logEvent(db, hook, 'info', `cycle ${cycle.cycle}: pointer arm, index withheld (would have been ${tokens} tokens)`);
+  return '';
 }

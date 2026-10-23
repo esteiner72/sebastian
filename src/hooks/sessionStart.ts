@@ -3,12 +3,17 @@ import { latestCycle, logEvent, recordInjection, type CycleIndex } from '../stor
 import { additionalContext } from '../reconcile/inject.js';
 import { estimateTokens, str } from '../transcript/text.js';
 import type { Payload } from './runHook.js';
+import { armFor, type Arm } from '../reconcile/arm.js';
 
 const RESUME_NOTE =
   'Sebastian archives this project\'s pre-compaction transcripts: `seb index` lists what the last summary dropped, `seb search <query>` finds an original.';
 
 const COMPACT_NOTE =
   'Sebastian archived this compaction. Its Forgotten Index is not ready yet: it arrives with your next message, or run `seb index` now.';
+
+// The pointer arm gets no index, so its note points at search instead of promising one.
+const POINTER_NOTE =
+  'Sebastian archived this compaction. Dropped detail is searchable with `seb search <words>`.';
 
 // Matcher `resume` injects one line saying the archive exists.
 //
@@ -29,7 +34,7 @@ export function sessionStart(db: DatabaseSync, payload: Payload): string {
   const cycle = latestCycle(db, str(payload.session_id));
   const src = source(payload);
   if (src === 'resume') return resumeNote(db, cycle);
-  if (src === 'compact') return compactNote(db, cycle);
+  if (src === 'compact') return compactNote(db, cycle, armFor(str(payload.session_id) ?? ''));
   logEvent(db, 'session-start', 'info', `source ${src ?? 'absent'}: nothing to inject`);
   return '';
 }
@@ -42,10 +47,11 @@ function resumeNote(db: DatabaseSync, cycle: CycleIndex | null): string {
   return additionalContext('SessionStart', RESUME_NOTE);
 }
 
-function compactNote(db: DatabaseSync, cycle: CycleIndex | null): string {
-  chargeNote(db, cycle, COMPACT_NOTE);
+function compactNote(db: DatabaseSync, cycle: CycleIndex | null, arm: Arm): string {
+  const note = arm === 'pointer' ? POINTER_NOTE : COMPACT_NOTE;
+  chargeNote(db, cycle, note);
   logEvent(db, 'session-start', 'info', 'compaction not yet settled; note injected');
-  return additionalContext('SessionStart', COMPACT_NOTE);
+  return additionalContext('SessionStart', note);
 }
 
 function chargeNote(db: DatabaseSync, cycle: CycleIndex | null, note: string): void {

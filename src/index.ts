@@ -7,7 +7,7 @@ import { postCompact } from './hooks/postCompact.js';
 import { sessionStart } from './hooks/sessionStart.js';
 import { userPromptSubmit } from './hooks/userPromptSubmit.js';
 import { readStdin, runHook, type Hook } from './hooks/runHook.js';
-import { dbPath, openDb, projectSlug, stampCommandMs } from './store/db.js';
+import { dbPath, openDb, projectSlug, stampCommand } from './store/db.js';
 import { UsageError } from './cli/args.js';
 import { search } from './cli/search.js';
 import { show } from './cli/show.js';
@@ -120,9 +120,10 @@ function callerSession(): string | undefined {
 function runAgainst(slug: string, name: string, run: Command, argv: string[]): number {
   const db = openDb(slug);
   const started = performance.now();
+  const caller = callerSession();
   try {
-    process.stdout.write(run(db, argv, callerSession()));
-    stampCommandMs(db, Math.round(performance.now() - started));
+    process.stdout.write(run(db, argv, caller));
+    stampCommand(db, Math.round(performance.now() - started), caller);
     return 0;
   } catch (err) {
     const reason = err instanceof UsageError ? err.message : String(err);

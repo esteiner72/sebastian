@@ -64,14 +64,14 @@ function seedVerdicts(db: DatabaseSync): void {
 describe('computeSteering', () => {
   it('emits the five base lines alone from a database holding no verdicts, so the first compaction of a project cannot print a rate divided by zero observations', () => {
     const db = tempDb();
-    expect(computeSteering(db, 0)).toBe(golden('steering-base.txt'));
+    expect(computeSteering(db, 0, 'index')).toBe(golden('steering-base.txt'));
     db.close();
   });
 
   it('earns a line only above a 0.5 drop-rate with at least 5 reconciled anchors, so an exactly-half type, a four-anchor sweep, and a total cmd sweep all stay silent', () => {
     const db = tempDb();
     seedVerdicts(db);
-    expect(computeSteering(db, 0)).toBe(golden('steering-droprate.txt'));
+    expect(computeSteering(db, 0, 'index')).toBe(golden('steering-droprate.txt'));
     db.close();
   });
 
@@ -92,7 +92,13 @@ describe('computeSteering', () => {
     logTelemetry(db, { cmd: 'show', anchorType: 'read', hits: 1 });
     logTelemetry(db, { cmd: 'status', hits: 0 });
 
-    expect(computeSteering(db, 0)).toBe(golden('steering-retrieval.txt'));
+    expect(computeSteering(db, 0, 'index')).toBe(golden('steering-retrieval.txt'));
+    db.close();
+  });
+
+  it('drops only the index announcement in the pointer arm, so that arm\'s summarizer is never promised an index that will not arrive', () => {
+    const db = tempDb();
+    expect(computeSteering(db, 0, 'pointer')).toBe(golden('steering-pointer.txt'));
     db.close();
   });
 });

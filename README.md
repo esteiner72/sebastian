@@ -93,6 +93,11 @@ cycle justifies.
 Within a type the most recent entry comes first, so the work nearest the compaction is the work
 the index names.
 
+**Experiment in progress.** This version withholds the index from a random half of sessions,
+which get only a one-line pointer to `seb search`, to measure whether the index earns its tokens.
+The arm is recorded in your local archive and nothing leaves your machine. Set
+`SEBASTIAN_ARM=index` to always get the index.
+
 On the author's archives, across 414 compactions, the index cost a median of 395 tokens, and nine
 in ten cost 431 or fewer. A one-line notice at session start adds about 35. The steering
 instructions, about 160 tokens, go to the summarizer with the compaction request rather than into

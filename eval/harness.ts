@@ -123,8 +123,10 @@ interface CycleInput {
 // transcript truncated to what each hook would have seen. PreCompact reads the pre-boundary file.
 // SessionStart runs before the cycle exists. PostCompact marks it pending, because the platform
 // writes the boundary record only after the hook exits. UserPromptSubmit closes the cycle and
-// injects, which is the output scored below.
+// injects, which is the output scored below. The eval scores the index, so every case runs in the
+// experiment's index arm whatever its session id hashes to.
 function runCycle(input: CycleInput): CycleRun {
+  process.env.SEBASTIAN_ARM = 'index';
   const prePath = join(input.tmp, `pre-${String(input.boundary.cycle)}.jsonl`);
   const postPath = join(input.tmp, `post-${String(input.boundary.cycle)}.jsonl`);
   writeFileSync(prePath, jsonl(input.preLines));

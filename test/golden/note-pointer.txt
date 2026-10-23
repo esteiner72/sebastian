@@ -1,0 +1,1 @@
+Sebastian archived this compaction. Dropped detail is searchable with `seb search <words>`.

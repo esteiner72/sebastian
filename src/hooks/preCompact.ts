@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { archiveDelta, logEvent } from '../store/db.js';
 import { logCatchUp } from '../reconcile/cycle.js';
+import { armFor } from '../reconcile/arm.js';
 import { computeSteering } from '../steer/adapt.js';
 import { extractAnchors, type Anchor } from '../transcript/anchors.js';
 import {
@@ -28,12 +29,13 @@ export function preCompact(db: DatabaseSync, payload: Payload): string {
   const path = resolveTranscript(payload);
   if (path === null) {
     logEvent(db, 'pre-compact', 'warn', 'no transcript to archive; steering only');
-    return withPrecedence(computeSteering(db, null), payload);
+    return withPrecedence(computeSteering(db, null, armFor(str(payload.session_id) ?? '')), payload);
   }
   const events = parseTranscript(path);
   const anchors = extractAnchors(events);
   const counts = archiveDelta(db, events, anchors);
-  recover(db, events, str(payload.session_id) ?? transcriptSession(events), anchors);
+  const sessionId = str(payload.session_id) ?? transcriptSession(events);
+  recover(db, events, sessionId, anchors);
   logEvent(
     db,
     'pre-compact',
@@ -41,7 +43,7 @@ export function preCompact(db: DatabaseSync, payload: Payload): string {
     `archived ${counts.messages} messages and ${counts.anchors} anchors from ${path}`,
   );
   // The boundaries already on disk number the cycle this compaction is about to create.
-  return withPrecedence(computeSteering(db, readBoundaries(events).length), payload);
+  return withPrecedence(computeSteering(db, readBoundaries(events).length, armFor(sessionId ?? '')), payload);
 }
 
 function recover(

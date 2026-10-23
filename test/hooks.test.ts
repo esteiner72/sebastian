@@ -32,6 +32,7 @@ const TS = '2026-08-31T12:00:00.000Z';
 const SEVEN_TYPES = fileURLToPath(new URL('./fixtures/seven-types.jsonl', import.meta.url));
 const BOUNDARY = fileURLToPath(new URL('./fixtures/boundary.jsonl', import.meta.url));
 const STEERING_BASE = fileURLToPath(new URL('./golden/steering-base.txt', import.meta.url));
+const NOTE_POINTER = fileURLToPath(new URL('./golden/note-pointer.txt', import.meta.url));
 // The block a hook prints when it has no transcript to count boundaries in: the same lines, with a
 // marker that cannot name the cycle.
 const STEERING_NO_TRANSCRIPT = fileURLToPath(new URL('./golden/steering-no-transcript.txt', import.meta.url));
@@ -220,7 +221,7 @@ describe('the compaction cycle, hook by hook', () => {
 // The budget is the only thing that bounds an injection once every drop is listable.
 describe('injection budget', () => {
   const cwd = join(HOME, 'project-budget');
-  const session = 'fix-budget';
+  const session = 'fix-budget-a';
 
   // Twelve question-and-answer pairs, so the cycle drops twelve `answer` anchors. Each reply runs
   // past the entry display width, so twelve entries cannot fit the budget, which is what makes the
@@ -298,12 +299,47 @@ describe('injection budget', () => {
   });
 });
 
+// The experiment's pointer arm: the same cycle, with the index withheld and the note pointing at
+// search. `fix-pointer` hashes to the pointer arm.
+describe('pointer arm', () => {
+  const cwd = join(HOME, 'project-pointer');
+  const session = 'fix-pointer';
+  const transcript = [
+    userText(session, 'u1', 'Why does the summarizer drop long explanations first?'),
+    assistantText(session, 'a2', 'The summarizer keeps identifiers when the compact instructions name them, and it collapses prose first, so a long session loses explanation before it loses a file path.'),
+    userText(session, 'u3', 'Thanks.'),
+    assistantText(session, 'a4', 'Done.'),
+    boundaryRecord(session, 'b5', ['u3', 'a4']),
+    summaryRecord(session, 's6', SUMMARY),
+  ];
+
+  it('withholds the index on the next prompt and logs what it would have cost, so the arm gets the pointer alone and the saving is measured', () => {
+    const path = writeTranscript(cwd, session, transcript);
+    runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    runHook('post-compact', HOOKS['post-compact'], payload({ session_id: session, transcript_path: path, cwd }));
+    expect(injected(runHook('session-start', HOOKS['session-start'],
+      payload({ session_id: session, cwd, source: 'compact' })))).toBe(readFileSync(NOTE_POINTER, 'utf8'));
+
+    expect(runHook('user-prompt-submit', HOOKS['user-prompt-submit'],
+      payload({ session_id: session, transcript_path: path, cwd }))).toBe('');
+    const db = openDb(projectSlug(cwd));
+    // The cycle was recorded before SessionStart ran, so it carries the note's cost and nothing else.
+    expect(db.prepare('SELECT arm, injected_tokens FROM cycles').all())
+      .toEqual([{ arm: 'pointer', injected_tokens: estimateTokens(readFileSync(NOTE_POINTER, 'utf8')) }]);
+    expect(count(db, "FROM log WHERE msg LIKE 'cycle 0: pointer arm, index withheld (would have been %'")).toBe(1);
+    db.close();
+  });
+});
+
 // The degraded paths. Each one has to end in exit 0 with the database in a state the next cycle
 // can still read.
+//
+// Session ids in this file hash to the index arm (see src/reconcile/arm.ts), so these tests keep
+// pinning rc.5 behavior; the pointer arm has its own tests.
 describe('degraded hook payloads', () => {
   it('resolves an empty transcript_path from the session id under the projects directory, and archives nothing when no such file exists', () => {
     const cwd = join(HOME, 'project-nopath');
-    const session = 'fix-nopath';
+    const session = 'fix-nopath-a';
     writeTranscript(cwd, session, readFileSync(SEVEN_TYPES, 'utf8').split('\n').filter((l) => l.trim() !== ''));
 
     expect(runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: session, transcript_path: '', cwd })))
@@ -312,7 +348,7 @@ describe('degraded hook payloads', () => {
     expect(count(db, 'FROM messages')).toBe(9);
 
     // No file anywhere for this session id: the archive is skipped, the steering channel is not.
-    expect(runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: 'no-such-session', transcript_path: '', cwd })))
+    expect(runHook('pre-compact', HOOKS['pre-compact'], payload({ session_id: 'no-such-session-b', transcript_path: '', cwd })))
       .toBe(readFileSync(STEERING_NO_TRANSCRIPT, 'utf8'));
     expect(count(db, 'FROM messages')).toBe(9);
     expect(count(db, "FROM log WHERE level = 'warn'")).toBe(1);
@@ -354,16 +390,16 @@ describe('degraded hook payloads', () => {
   it('cedes precedence to a /compact argument with one appended line, so steering cannot contradict an explicit user instruction', () => {
     const cwd = join(HOME, 'project-custom');
     const out = runHook('pre-compact', HOOKS['pre-compact'],
-      payload({ session_id: 'fix-custom', cwd, custom_instructions: 'focus on the auth work' }));
+      payload({ session_id: 'fix-custom-b', cwd, custom_instructions: 'focus on the auth work' }));
     expect(out).toBe(`${readFileSync(STEERING_NO_TRANSCRIPT, 'utf8')}- The user's own compact instructions take precedence over the lines above wherever they conflict.\n`);
 
     // The probe observed custom_instructions: null on a bare /compact — no line for null, and
     // none for whitespace either.
     expect(runHook('pre-compact', HOOKS['pre-compact'],
-      payload({ session_id: 'fix-custom', cwd, custom_instructions: null })))
+      payload({ session_id: 'fix-custom-b', cwd, custom_instructions: null })))
       .toBe(readFileSync(STEERING_NO_TRANSCRIPT, 'utf8'));
     expect(runHook('pre-compact', HOOKS['pre-compact'],
-      payload({ session_id: 'fix-custom', cwd, custom_instructions: '  ' })))
+      payload({ session_id: 'fix-custom-b', cwd, custom_instructions: '  ' })))
       .toBe(readFileSync(STEERING_NO_TRANSCRIPT, 'utf8'));
   });
 
@@ -743,7 +779,7 @@ describe('degraded hook payloads', () => {
     // A second session in the same project database degrades: boundary, no summary anywhere.
     // Its injection must be empty, not the other session's index — anchor ids are session-local,
     // so a cross-session entry could not even be retrieved.
-    const session = 'fix-cross';
+    const session = 'fix-cross-c';
     const path = writeTranscript(cwd, session, [
       userText(session, 'y1', 'How should the renderer bound the digest tier?'),
       assistantText(session, 'y2',
