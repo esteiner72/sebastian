@@ -13,10 +13,14 @@ archives the transcript, works out what the summary lost, and hands the model an
 missing pieces with the commands that retrieve them. The summary becomes a table of contents over
 the archive instead of a replacement for it.
 
+This is a personal project, and is a work in progress, but anyone is free to use or contribute.
+It is constantly being tested all-day every-day in my actual work, and I am improving or changing it based
+on those results, up until I feel it is in a useful enough place to call it a "v1".
+
 ## Status
 
-Pre-release. You can install it from source today. Release candidates are published to npm under the
-`next` tag with provenance, but nothing about the plugin is stable yet.
+Pre-release. You can install it from source today. Release candidates are usually published to npm under the
+`next` tag with provenance, but nothing about the plugin is stable yet, and I may not publish every RC.
 
 ## Requirements
 
